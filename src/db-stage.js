@@ -192,7 +192,12 @@ async function latestSnapshot(env) {
 }
 
 async function latestRunDetail(env) {
-  const run = await env.DB.prepare(`SELECT * FROM crawl_runs ORDER BY id DESC LIMIT 1`).first();
+  const run = await env.DB.prepare(`
+    SELECT * FROM crawl_runs
+    WHERE finished_at IS NOT NULL AND status <> 'running'
+    ORDER BY id DESC
+    LIMIT 1
+  `).first();
   if (!run) return { run: null, results: [] };
   const rows = await env.DB.prepare(`
     SELECT university_name, agency, parser, status, inner_quota, inner_apply, total_quota, total_apply, warning_note
