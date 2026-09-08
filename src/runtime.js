@@ -1,16 +1,31 @@
 import app from './db-stage.js';
+import { probeKyungsungSession } from './ks-session-probe.js';
 
 const PUBLIC_COLLECT_URL = 'https://admissions-ratio-2027-test.zhoon48.workers.dev/collect/once?source=cron';
 
 export default {
   async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (url.pathname === '/debug/ks-session') {
+      try {
+        return Response.json(await probeKyungsungSession(), {
+          headers: { 'Cache-Control': 'no-store' }
+        });
+      } catch (e) {
+        return Response.json({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e)
+        }, {
+          status: 500,
+          headers: { 'Cache-Control': 'no-store' }
+        });
+      }
+    }
     return app.fetch(request, env, ctx);
   },
 
   async scheduled(controller, env, ctx) {
     ctx.waitUntil((async () => {
-      // Cron 자체 실행 위치와 실제 수집 위치를 분리합니다.
-      // 공개 HTTP 경로로 다시 들어오게 하면 fetch 요청에 지정한 Seoul placement가 적용됩니다.
       const response = await fetch(PUBLIC_COLLECT_URL, {
         headers: {
           'Accept': 'application/json',
