@@ -1,6 +1,6 @@
 import app from './db-stage.js';
 import { probeKyungsungSession, probeKyungsungLoginForm, probeKyungsungLoginScript } from './ks-session-probe.js';
-import { kyungsungLiveWithAccount } from './ks-auth.js';
+import { kyungsungLiveWithAccount, kyungsungCorrectionDiagnostics } from './ks-auth.js';
 import { collectHybridAndStore } from './hybrid-store.js';
 
 const PUBLIC_COLLECT_URL = 'https://admissions-ratio-2027-test.zhoon48.workers.dev/collect/once?source=cron';
@@ -13,6 +13,22 @@ export default {
       try {
         const triggerType = url.searchParams.get('source') === 'cron' ? 'cron' : 'manual';
         return Response.json(await collectHybridAndStore(env, triggerType), {
+          headers: { 'Cache-Control': 'no-store' }
+        });
+      } catch (e) {
+        return Response.json({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e)
+        }, {
+          status: 500,
+          headers: { 'Cache-Control': 'no-store' }
+        });
+      }
+    }
+
+    if (url.pathname === '/debug/ks-corrections') {
+      try {
+        return Response.json(await kyungsungCorrectionDiagnostics(env), {
           headers: { 'Cache-Control': 'no-store' }
         });
       } catch (e) {
