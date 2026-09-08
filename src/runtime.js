@@ -1,12 +1,30 @@
 import app from './db-stage.js';
 import { probeKyungsungSession, probeKyungsungLoginForm, probeKyungsungLoginScript } from './ks-session-probe.js';
 import { kyungsungLiveWithAccount } from './ks-auth.js';
+import { collectHybridAndStore } from './hybrid-store.js';
 
 const PUBLIC_COLLECT_URL = 'https://admissions-ratio-2027-test.zhoon48.workers.dev/collect/once?source=cron';
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/collect/once') {
+      try {
+        const triggerType = url.searchParams.get('source') === 'cron' ? 'cron' : 'manual';
+        return Response.json(await collectHybridAndStore(env, triggerType), {
+          headers: { 'Cache-Control': 'no-store' }
+        });
+      } catch (e) {
+        return Response.json({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e)
+        }, {
+          status: 500,
+          headers: { 'Cache-Control': 'no-store' }
+        });
+      }
+    }
 
     if (url.pathname === '/debug/ks-auth-live') {
       try {
@@ -87,10 +105,6 @@ export default {
       if (!response.ok || !body?.saved || !body?.runId) {
         throw new Error(`자동수집 실패: ${JSON.stringify(body)}`);
       }
-
-      await env.DB.prepare('UPDATE crawl_runs SET trigger_type=? WHERE id=?')
-        .bind('cron', body.runId)
-        .run();
     })());
   }
 };
