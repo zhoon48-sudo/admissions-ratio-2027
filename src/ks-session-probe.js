@@ -14,6 +14,34 @@ function attr(tag, name) {
   return m2 ? m2[1] : '';
 }
 
+function scriptDiagnostics(html) {
+  const externalScripts = [];
+  for (const m of html.matchAll(/<script\b[^>]*src\s*=\s*["']([^"']+)["'][^>]*>/gi)) externalScripts.push(m[1]);
+
+  const inlineScripts = [];
+  for (const m of html.matchAll(/<script\b(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const s = (m[1] || '').trim();
+    if (s) inlineScripts.push(s);
+  }
+
+  const joined = inlineScripts.join('\n');
+  const needles = ['empId', 'pw', 'saveId', 'brf_login', 'login', 'cmd=', '$.ajax', 'ajax(', 'fetch(', '.submit(', 'location.href', 'keydown', 'keyup'];
+  const snippets = [];
+  for (const needle of needles) {
+    let pos = joined.toLowerCase().indexOf(needle.toLowerCase());
+    while (pos >= 0 && snippets.length < 40) {
+      snippets.push(joined.slice(Math.max(0, pos - 260), Math.min(joined.length, pos + 520)).replace(/\s+/g, ' ').trim());
+      pos = joined.toLowerCase().indexOf(needle.toLowerCase(), pos + needle.length);
+    }
+  }
+
+  return {
+    externalScripts: [...new Set(externalScripts)],
+    inlineScriptCount: inlineScripts.length,
+    snippets: [...new Set(snippets)].slice(0, 40)
+  };
+}
+
 export async function probeKyungsungLoginForm() {
   const started = Date.now();
   const response = await fetch(KS_LOGIN_URL, {
@@ -63,6 +91,24 @@ export async function probeKyungsungLoginForm() {
     title,
     forms,
     htmlLength: html.length
+  };
+}
+
+export async function probeKyungsungLoginScript() {
+  const started = Date.now();
+  const response = await fetch(KS_LOGIN_URL, {
+    headers: {
+      'Accept': 'text/html,application/xhtml+xml',
+      'User-Agent': 'Mozilla/5.0 (compatible; AdmissionsRatio2027/1.0)'
+    },
+    redirect: 'follow'
+  });
+  const html = await response.text();
+  return {
+    ok: response.ok,
+    httpStatus: response.status,
+    elapsedMs: Date.now() - started,
+    ...scriptDiagnostics(html)
   };
 }
 
