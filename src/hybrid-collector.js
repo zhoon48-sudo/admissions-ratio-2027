@@ -10,23 +10,35 @@ const NAME_MAP = {
   '동서대':'동서대학교',
   '동명대':'동명대학교',
   '부산외대':'부산외국어대학교',
+  '부산외국어대':'부산외국어대학교',
   '신라대':'신라대학교',
   '고신대':'고신대학교',
   '부산가톨릭대':'부산가톨릭대학교',
   '부산대':'부산대학교',
   '부경대':'부경대학교',
+  '국립부경대':'부경대학교',
   '한국해양대':'한국해양대학교',
   '울산대':'울산대학교',
   '경남대':'경남대학교',
   '인제대':'인제대학교',
   '영산대':'영산대학교',
   '경상국립대':'경상국립대학교',
-  '창원대':'창원대학교'
+  '창원대':'창원대학교',
+  '국립창원대':'창원대학교'
 };
 
 function firstCookie(headers){
   const raw = headers.get('set-cookie') || '';
   return raw ? raw.split(';')[0] : '';
+}
+
+function canonicalName(name){
+  let s = String(name || '').replace(/\s+/g, '').trim();
+  if(NAME_MAP[s]) s = NAME_MAP[s];
+  s = s.replace(/^국립/, '');
+  s = s.replace(/대학교$/, '대');
+  if(s === '부산외대') s = '부산외국어대';
+  return s;
 }
 
 function rate(quota, apply){
@@ -132,7 +144,8 @@ function fromKyungsung(u, row){
     unknown:[],
     warnings,
     sourceCollectedAt:row.collectedAt || null,
-    univCd:row.univCd || null
+    univCd:row.univCd || null,
+    sourceUnivName:row.univName || null
   };
 }
 
@@ -147,14 +160,18 @@ export async function collectHybrid(env){
   ]);
 
   const ksByName = new Map();
+  const ksByCanonicalName = new Map();
   for(const row of ks.univs){
     const fullName = NAME_MAP[row.univName] || row.univName;
     ksByName.set(fullName, row);
+    ksByCanonicalName.set(canonicalName(fullName), row);
+    ksByCanonicalName.set(canonicalName(row.univName), row);
   }
 
   const byName = new Map(uwayResults.map(r => [r.name, r]));
   for(const u of jinhakUniversities){
-    byName.set(u.name, fromKyungsung(u, ksByName.get(u.name)));
+    const row = ksByName.get(u.name) || ksByCanonicalName.get(canonicalName(u.name));
+    byName.set(u.name, fromKyungsung(u, row));
   }
 
   const results = UNIVERSITIES.map(u => byName.get(u.name) || {
