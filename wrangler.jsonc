@@ -1,6 +1,14 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "admissions-ratio-2027-test",
-  "main": "src/v7.js",
-  "compatibility_date": "2026-09-08"
+  "main": "src/db-stage.js",
+  "compatibility_date": "2026-09-08",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "admissions-ratio-2027-db",
+      "database_id": "e9e4e688-7215-4881-bd1d-4fc0fe0a5d0c",
+      "migrations_dir": "migrations"
+    }
+  ]
 }
