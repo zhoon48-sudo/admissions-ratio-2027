@@ -7,6 +7,9 @@
   "placement": {
     "region": "aws:ap-northeast-2"
   },
+  "secrets": {
+    "required": ["KS_EMP_ID", "KS_PASSWORD"]
+  },
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
