@@ -1,8 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "admissions-ratio-2027-test",
-  "main": "src/db-stage.js",
+  "main": "src/runtime.js",
   "compatibility_date": "2026-09-08",
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",
