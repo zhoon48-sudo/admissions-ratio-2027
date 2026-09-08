@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "admissions-ratio-2027-test",
-  "main": "src/v5.js",
+  "main": "src/v6.js",
   "compatibility_date": "2026-09-08"
 }
