@@ -1,11 +1,28 @@
 import app from './db-stage.js';
-import { probeKyungsungSession } from './ks-session-probe.js';
+import { probeKyungsungSession, probeKyungsungLoginForm } from './ks-session-probe.js';
 
 const PUBLIC_COLLECT_URL = 'https://admissions-ratio-2027-test.zhoon48.workers.dev/collect/once?source=cron';
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/debug/ks-login-form') {
+      try {
+        return Response.json(await probeKyungsungLoginForm(), {
+          headers: { 'Cache-Control': 'no-store' }
+        });
+      } catch (e) {
+        return Response.json({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e)
+        }, {
+          status: 500,
+          headers: { 'Cache-Control': 'no-store' }
+        });
+      }
+    }
+
     if (url.pathname === '/debug/ks-session') {
       try {
         return Response.json(await probeKyungsungSession(), {
