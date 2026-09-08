@@ -1,58 +1,67 @@
 import auditApp from './v7.js';
 import { auditAll, UNIVERSITIES } from './parser-v7.js';
 
-const SCHEMA_SQL = `
-PRAGMA foreign_keys = ON;
-CREATE TABLE IF NOT EXISTS universities (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  agency TEXT NOT NULL,
-  source_url TEXT NOT NULL,
-  sort_order INTEGER NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS crawl_runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  trigger_type TEXT NOT NULL DEFAULT 'manual',
-  started_at TEXT NOT NULL,
-  finished_at TEXT,
-  status TEXT NOT NULL DEFAULT 'running',
-  ok_count INTEGER NOT NULL DEFAULT 0,
-  error_count INTEGER NOT NULL DEFAULT 0,
-  note TEXT
-);
-CREATE TABLE IF NOT EXISTS competition_snapshots (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id INTEGER NOT NULL,
-  university_name TEXT NOT NULL,
-  agency TEXT NOT NULL,
-  parser TEXT,
-  status TEXT NOT NULL,
-  inner_quota INTEGER,
-  inner_apply INTEGER,
-  inner_rate REAL,
-  outside_quota INTEGER,
-  outside_apply INTEGER,
-  outside_rate REAL,
-  total_quota INTEGER,
-  total_apply INTEGER,
-  total_rate REAL,
-  excluded_note TEXT,
-  warning_note TEXT,
-  source_url TEXT NOT NULL,
-  collected_at TEXT NOT NULL,
-  FOREIGN KEY (run_id) REFERENCES crawl_runs(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_snapshots_university_time ON competition_snapshots(university_name, collected_at DESC);
-CREATE INDEX IF NOT EXISTS idx_snapshots_run ON competition_snapshots(run_id);
-CREATE INDEX IF NOT EXISTS idx_runs_started ON crawl_runs(started_at DESC);
-`;
+// D1의 exec()에 여러 SQL 문장을 한 번에 넣지 않고, 각 문장을 개별 실행합니다.
+// D1은 foreign_keys가 기본 활성화되어 있으므로 PRAGMA foreign_keys = ON은 사용하지 않습니다.
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS universities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    agency TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS crawl_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trigger_type TEXT NOT NULL DEFAULT 'manual',
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    ok_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    note TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS competition_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    university_name TEXT NOT NULL,
+    agency TEXT NOT NULL,
+    parser TEXT,
+    status TEXT NOT NULL,
+    inner_quota INTEGER,
+    inner_apply INTEGER,
+    inner_rate REAL,
+    outside_quota INTEGER,
+    outside_apply INTEGER,
+    outside_rate REAL,
+    total_quota INTEGER,
+    total_apply INTEGER,
+    total_rate REAL,
+    excluded_note TEXT,
+    warning_note TEXT,
+    source_url TEXT NOT NULL,
+    collected_at TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES crawl_runs(id) ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_snapshots_university_time
+    ON competition_snapshots(university_name, collected_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_snapshots_run
+    ON competition_snapshots(run_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_runs_started
+    ON crawl_runs(started_at DESC)`
+];
 
 async function initDb(env) {
   if (!env.DB) throw new Error('D1 binding DB가 연결되지 않았습니다.');
-  await env.DB.exec(SCHEMA_SQL);
+
+  // 한 문장씩 실행해 D1의 다중문장 exec 파싱 문제를 피합니다.
+  for (const sql of SCHEMA_STATEMENTS) {
+    await env.DB.prepare(sql).run();
+  }
+
   const statements = UNIVERSITIES.map((u, i) =>
     env.DB.prepare(`INSERT OR IGNORE INTO universities (name, agency, source_url, sort_order) VALUES (?, ?, ?, ?)`)
       .bind(u.name, u.agency, u.url, i + 1)
