@@ -1,8 +1,6 @@
 import auditApp from './v7.js';
-import { auditAll, UNIVERSITIES } from './parser-v7.js';
+import { auditAll, auditOne, UNIVERSITIES } from './parser-v7.js';
 
-// D1의 exec()에 여러 SQL 문장을 한 번에 넣지 않고, 각 문장을 개별 실행합니다.
-// D1은 foreign_keys가 기본 활성화되어 있으므로 PRAGMA foreign_keys = ON은 사용하지 않습니다.
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS universities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,10 +52,11 @@ const SCHEMA_STATEMENTS = [
     ON crawl_runs(started_at DESC)`
 ];
 
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 async function initDb(env) {
   if (!env.DB) throw new Error('D1 binding DB가 연결되지 않았습니다.');
 
-  // 한 문장씩 실행해 D1의 다중문장 exec 파싱 문제를 피합니다.
   for (const sql of SCHEMA_STATEMENTS) {
     await env.DB.prepare(sql).run();
   }
@@ -80,7 +79,7 @@ async function dbStatus(env) {
     const uni = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM universities').first();
     const runs = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM crawl_runs').first();
     const snaps = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM competition_snapshots').first();
-    const latest = await env.DB.prepare('SELECT id, started_at, finished_at, status, ok_count, error_count FROM crawl_runs ORDER BY id DESC LIMIT 1').first();
+    const latest = await env.DB.prepare('SELECT id, started_at, finished_at, status, ok_count, error_count, note FROM crawl_runs ORDER BY id DESC LIMIT 1').first();
     return {
       connected: true,
       initialized: true,
@@ -95,6 +94,39 @@ async function dbStatus(env) {
   }
 }
 
+async function collectWithRetry() {
+  const data = await auditAll();
+  const results = [...data.results];
+  let retryAttempts = 0;
+  let recovered = 0;
+
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].level === '정상') continue;
+    const u = UNIVERSITIES.find(x => x.name === results[i].name);
+    if (!u) continue;
+
+    let latest = results[i];
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await sleep(attempt === 1 ? 500 : 1000);
+      retryAttempts++;
+      latest = await auditOne(u);
+      if (latest.level === '정상') {
+        recovered++;
+        break;
+      }
+    }
+    results[i] = latest;
+  }
+
+  return {
+    ...data,
+    checkedAt: new Date().toISOString(),
+    results,
+    retryAttempts,
+    recovered
+  };
+}
+
 async function collectAndStore(env, triggerType = 'manual') {
   await initDb(env);
   const startedAt = new Date().toISOString();
@@ -104,7 +136,7 @@ async function collectAndStore(env, triggerType = 'manual') {
   if (!runId) throw new Error('crawl_runs 실행번호 생성에 실패했습니다.');
 
   try {
-    const data = await auditAll();
+    const data = await collectWithRetry();
     const collectedAt = data.checkedAt || new Date().toISOString();
     const inserts = data.results.map(r => env.DB.prepare(`
       INSERT INTO competition_snapshots (
@@ -120,7 +152,7 @@ async function collectAndStore(env, triggerType = 'manual') {
       r.outside?.quota ?? null, r.outside?.apply ?? null, r.outside?.rate ?? null,
       r.total?.quota ?? null, r.total?.apply ?? null, r.total?.rate ?? null,
       r.excluded?.length ? r.excluded.join(' | ') : null,
-      r.warnings?.length ? r.warnings.join(' | ') : null,
+      r.warnings?.length ? r.warnings.join(' | ') : (r.error || null),
       r.url, collectedAt
     ));
     if (inserts.length) await env.DB.batch(inserts);
@@ -128,8 +160,9 @@ async function collectAndStore(env, triggerType = 'manual') {
     const okCount = data.results.filter(r => r.level === '정상').length;
     const errorCount = data.results.length - okCount;
     const finishedAt = new Date().toISOString();
-    await env.DB.prepare(`UPDATE crawl_runs SET finished_at=?, status=?, ok_count=?, error_count=? WHERE id=?`)
-      .bind(finishedAt, errorCount === 0 ? 'success' : 'partial', okCount, errorCount, runId).run();
+    const note = `retryAttempts=${data.retryAttempts || 0}, recovered=${data.recovered || 0}`;
+    await env.DB.prepare(`UPDATE crawl_runs SET finished_at=?, status=?, ok_count=?, error_count=?, note=? WHERE id=?`)
+      .bind(finishedAt, errorCount === 0 ? 'success' : 'partial', okCount, errorCount, note, runId).run();
 
     return {
       saved: true,
@@ -139,7 +172,9 @@ async function collectAndStore(env, triggerType = 'manual') {
       universities: data.results.length,
       okCount,
       errorCount,
-      snapshotsSaved: data.results.length
+      snapshotsSaved: data.results.length,
+      retryAttempts: data.retryAttempts || 0,
+      recovered: data.recovered || 0
     };
   } catch (e) {
     const finishedAt = new Date().toISOString();
@@ -156,6 +191,18 @@ async function latestSnapshot(env) {
   return { run, results: rows.results || [] };
 }
 
+async function latestRunDetail(env) {
+  const run = await env.DB.prepare(`SELECT * FROM crawl_runs ORDER BY id DESC LIMIT 1`).first();
+  if (!run) return { run: null, results: [] };
+  const rows = await env.DB.prepare(`
+    SELECT university_name, agency, parser, status, inner_quota, inner_apply, total_quota, total_apply, warning_note
+    FROM competition_snapshots
+    WHERE run_id=?
+    ORDER BY id
+  `).bind(run.id).all();
+  return { run, results: rows.results || [] };
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -165,6 +212,9 @@ export default {
       }
       if (url.pathname === '/db/status') {
         return Response.json(await dbStatus(env), { headers: { 'Cache-Control': 'no-store' } });
+      }
+      if (url.pathname === '/db/latest-run') {
+        return Response.json(await latestRunDetail(env), { headers: { 'Cache-Control': 'no-store' } });
       }
       if (url.pathname === '/collect/once') {
         return Response.json(await collectAndStore(env, 'manual'), { headers: { 'Cache-Control': 'no-store' } });
