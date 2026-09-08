@@ -1,5 +1,5 @@
 import auditApp from './v7.js';
-import { auditAll, auditOne, UNIVERSITIES } from './parser-v7.js';
+import { auditAll, UNIVERSITIES } from './parser-v7.js';
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS universities (
@@ -52,8 +52,6 @@ const SCHEMA_STATEMENTS = [
     ON crawl_runs(started_at DESC)`
 ];
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
 async function initDb(env) {
   if (!env.DB) throw new Error('D1 binding DB가 연결되지 않았습니다.');
 
@@ -79,7 +77,13 @@ async function dbStatus(env) {
     const uni = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM universities').first();
     const runs = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM crawl_runs').first();
     const snaps = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM competition_snapshots').first();
-    const latest = await env.DB.prepare('SELECT id, started_at, finished_at, status, ok_count, error_count, note FROM crawl_runs ORDER BY id DESC LIMIT 1').first();
+    const latest = await env.DB.prepare(`
+      SELECT id, started_at, finished_at, status, ok_count, error_count, note
+      FROM crawl_runs
+      WHERE finished_at IS NOT NULL AND status <> 'running'
+      ORDER BY id DESC
+      LIMIT 1
+    `).first();
     return {
       connected: true,
       initialized: true,
@@ -94,37 +98,17 @@ async function dbStatus(env) {
   }
 }
 
-async function collectWithRetry() {
-  const data = await auditAll();
-  const results = [...data.results];
-  let retryAttempts = 0;
-  let recovered = 0;
+function diagnosticText(r) {
+  if (r.warnings?.length) return r.warnings.join(' | ');
+  if (r.level === '정상') return null;
 
-  for (let i = 0; i < results.length; i++) {
-    if (results[i].level === '정상') continue;
-    const u = UNIVERSITIES.find(x => x.name === results[i].name);
-    if (!u) continue;
-
-    let latest = results[i];
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      await sleep(attempt === 1 ? 500 : 1000);
-      retryAttempts++;
-      latest = await auditOne(u);
-      if (latest.level === '정상') {
-        recovered++;
-        break;
-      }
-    }
-    results[i] = latest;
-  }
-
-  return {
-    ...data,
-    checkedAt: new Date().toISOString(),
-    results,
-    retryAttempts,
-    recovered
-  };
+  const parts = [];
+  if (r.httpStatus != null) parts.push(`HTTP ${r.httpStatus}`);
+  if (r.title) parts.push(`title=${String(r.title).slice(0, 140)}`);
+  if (r.contentType) parts.push(`contentType=${String(r.contentType).slice(0, 100)}`);
+  if (r.error) parts.push(`error=${r.error}`);
+  if (r.unknown?.length) parts.push(`unknown=${r.unknown.slice(0, 5).join(', ')}`);
+  return parts.join(' | ') || '원인정보 없음';
 }
 
 async function collectAndStore(env, triggerType = 'manual') {
@@ -136,7 +120,7 @@ async function collectAndStore(env, triggerType = 'manual') {
   if (!runId) throw new Error('crawl_runs 실행번호 생성에 실패했습니다.');
 
   try {
-    const data = await collectWithRetry();
+    const data = await auditAll();
     const collectedAt = data.checkedAt || new Date().toISOString();
     const inserts = data.results.map(r => env.DB.prepare(`
       INSERT INTO competition_snapshots (
@@ -152,7 +136,7 @@ async function collectAndStore(env, triggerType = 'manual') {
       r.outside?.quota ?? null, r.outside?.apply ?? null, r.outside?.rate ?? null,
       r.total?.quota ?? null, r.total?.apply ?? null, r.total?.rate ?? null,
       r.excluded?.length ? r.excluded.join(' | ') : null,
-      r.warnings?.length ? r.warnings.join(' | ') : (r.error || null),
+      diagnosticText(r),
       r.url, collectedAt
     ));
     if (inserts.length) await env.DB.batch(inserts);
@@ -160,7 +144,7 @@ async function collectAndStore(env, triggerType = 'manual') {
     const okCount = data.results.filter(r => r.level === '정상').length;
     const errorCount = data.results.length - okCount;
     const finishedAt = new Date().toISOString();
-    const note = `retryAttempts=${data.retryAttempts || 0}, recovered=${data.recovered || 0}`;
+    const note = 'diagnostic=no-retry';
     await env.DB.prepare(`UPDATE crawl_runs SET finished_at=?, status=?, ok_count=?, error_count=?, note=? WHERE id=?`)
       .bind(finishedAt, errorCount === 0 ? 'success' : 'partial', okCount, errorCount, note, runId).run();
 
@@ -172,9 +156,7 @@ async function collectAndStore(env, triggerType = 'manual') {
       universities: data.results.length,
       okCount,
       errorCount,
-      snapshotsSaved: data.results.length,
-      retryAttempts: data.retryAttempts || 0,
-      recovered: data.recovered || 0
+      snapshotsSaved: data.results.length
     };
   } catch (e) {
     const finishedAt = new Date().toISOString();
