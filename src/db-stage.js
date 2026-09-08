@@ -1,6 +1,8 @@
 import auditApp from './v7.js';
 import { auditAll, UNIVERSITIES } from './parser-v7.js';
 
+const KS_LIVE_URL = 'https://ipsiu.ks.ac.kr/ipsi/servlet/ipsi.Manager?cmd=cmp_live';
+
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS universities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -190,6 +192,26 @@ async function latestRunDetail(env) {
   return { run, results: rows.results || [] };
 }
 
+async function testKyungsungLive() {
+  const started = Date.now();
+  const response = await fetch(KS_LIVE_URL, {
+    headers: {
+      'Accept': 'application/json,text/plain,*/*',
+      'User-Agent': 'AdmissionsRatio2027-Cloudflare-Test/1.0'
+    },
+    redirect: 'follow'
+  });
+  const text = await response.text();
+  return {
+    ok: response.ok,
+    httpStatus: response.status,
+    contentType: response.headers.get('content-type') || '',
+    elapsedMs: Date.now() - started,
+    length: text.length,
+    preview: text.slice(0, 1200)
+  };
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -202,6 +224,9 @@ export default {
       }
       if (url.pathname === '/db/latest-run') {
         return Response.json(await latestRunDetail(env), { headers: { 'Cache-Control': 'no-store' } });
+      }
+      if (url.pathname === '/debug/ks-live') {
+        return Response.json(await testKyungsungLive(), { headers: { 'Cache-Control': 'no-store' } });
       }
       if (url.pathname === '/collect/once') {
         return Response.json(await collectAndStore(env, 'manual'), { headers: { 'Cache-Control': 'no-store' } });
