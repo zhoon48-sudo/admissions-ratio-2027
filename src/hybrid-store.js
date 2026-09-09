@@ -1,11 +1,57 @@
 import { collectHybrid } from './hybrid-collector-silla-final.js';
 import { importLegacyReports } from './legacy-report-import.js';
 
+const PRIORITY_TARGETS = {
+  '부산외국어대학교':1554,
+  '신라대학교':1472
+};
+
+function rate(quota,apply){return quota>0?+(apply/quota).toFixed(2):null}
+function metric(quota,apply){return Number.isFinite(quota)&&Number.isFinite(apply)?{quota,apply,rate:rate(quota,apply)}:null}
+
 function diagnosticText(r){
   if(r.warnings?.length) return r.warnings.join(' | ');
   if(r.level === '정상') return null;
   if(r.error) return String(r.error);
   return '원인정보 없음';
+}
+
+async function lastFreshPriority(env,name,expectedTotalQuota){
+  try{
+    return await env.DB.prepare(`
+      SELECT * FROM competition_snapshots
+      WHERE university_name=?
+        AND status='정상'
+        AND run_id>0
+        AND total_quota=?
+        AND parser LIKE '%SUMMARY_PRIORITY%'
+      ORDER BY collected_at DESC, id DESC
+      LIMIT 1
+    `).bind(name,expectedTotalQuota).first();
+  }catch{return null}
+}
+
+async function protectPriorityTargets(env,data){
+  const fresh=data.targetFresh||{};
+  const out=[];
+  for(const r of (data.results||[])){
+    const expected=PRIORITY_TARGETS[r.name];
+    if(!expected){out.push(r);continue}
+    if(fresh[r.name]?.ok){out.push(r);continue}
+
+    const previous=await lastFreshPriority(env,r.name,expected);
+    const freshError=fresh[r.name]?.error||fresh[r.name]?.directError||'최신 원본 상단표 조회 실패';
+    if(previous){
+      const iq=Number(previous.inner_quota),ia=Number(previous.inner_apply),oq=Number(previous.outside_quota),oa=Number(previous.outside_apply),tq=Number(previous.total_quota),ta=Number(previous.total_apply);
+      if([iq,ia,oq,oa,tq,ta].every(Number.isFinite)){
+        out.push({...r,level:'지연',parser:`${previous.parser||'JINHAK_SUMMARY_PRIORITY'}_LAST_FRESH`,inner:metric(iq,ia),outside:metric(oq,oa),total:metric(tq,ta),excluded:String(previous.excluded_note||'').split(' | ').filter(Boolean),warnings:[`최신 진학사 상단표 조회 실패 · 마지막 직접 검증값 유지 (${freshError})`],sourceCollectedAt:previous.collected_at||r.sourceCollectedAt||null});
+        continue;
+      }
+    }
+
+    out.push({...r,level:'검증필요',parser:`${r.parser||'JINHAK'}_FRESH_REQUIRED`,inner:null,outside:null,total:null,warnings:[`최신 진학사 상단표를 확인하지 못해 과거 보정값은 사용하지 않습니다. (${freshError})`]});
+  }
+  return {...data,results:out};
 }
 
 export async function collectHybridAndStore(env, triggerType='manual'){
@@ -19,7 +65,8 @@ export async function collectHybridAndStore(env, triggerType='manual'){
   if(!runId) throw new Error('crawl_runs 실행번호 생성에 실패했습니다.');
 
   try{
-    const data = await collectHybrid(env);
+    let data = await collectHybrid(env);
+    data = await protectPriorityTargets(env,data);
     const collectedAt = data.checkedAt || new Date().toISOString();
 
     const inserts = data.results.map(r => env.DB.prepare(`
@@ -48,7 +95,8 @@ export async function collectHybridAndStore(env, triggerType='manual'){
     const finishedAt = new Date().toISOString();
     const fallbackNames = Object.entries(data.repatriateFallback || {}).filter(([,v])=>v?.ok).map(([k])=>k);
     const delayedNames = data.results.filter(r=>r.level==='지연').map(r=>r.name);
-    const note = `hybrid=uway-direct+jinhak-ks+silla-priority${fallbackNames.length?'+jina-fallback':''}; roundId=${data.sourceRoundId ?? 'unknown'}${fallbackNames.length?`; fallback=${fallbackNames.join(',')}`:''}${delayedNames.length?`; delayed=${delayedNames.join(',')}`:''}`;
+    const freshNames=Object.entries(data.targetFresh||{}).filter(([,v])=>v?.ok).map(([k])=>k);
+    const note = `hybrid=uway-direct+jinhak-ks+priority-summary${fallbackNames.length?'+jina-fallback':''}; roundId=${data.sourceRoundId ?? 'unknown'}${freshNames.length?`; fresh=${freshNames.join(',')}`:''}${fallbackNames.length?`; fallback=${fallbackNames.join(',')}`:''}${delayedNames.length?`; delayed=${delayedNames.join(',')}`:''}`;
 
     await env.DB.prepare(
       `UPDATE crawl_runs SET finished_at=?, status=?, ok_count=?, error_count=?, note=? WHERE id=?`
@@ -79,9 +127,11 @@ export async function collectHybridAndStore(env, triggerType='manual'){
       errorCount,
       snapshotsSaved:data.results.length,
       sourceRoundId:data.sourceRoundId ?? null,
-      collectionMode:fallbackNames.length?'hybrid-resilient':'hybrid',
+      collectionMode:freshNames.length?'priority-summary':'hybrid',
+      freshUniversities:freshNames,
       fallbackUniversities:fallbackNames,
       delayedUniversities:delayedNames,
+      priorityTargets:data.results.filter(r=>PRIORITY_TARGETS[r.name]).map(r=>({name:r.name,status:r.level,parser:r.parser,inner:r.inner,total:r.total,sourceCollectedAt:r.sourceCollectedAt||null,warning:r.warnings?.[0]||null})),
       legacyImport
     };
   }catch(e){
