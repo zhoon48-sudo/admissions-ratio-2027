@@ -2,7 +2,8 @@ const LEGACY_REPORTS = {
   '2026-09-07': {
     dayNo: 1,
     reportTime: '16:00',
-    note: '기존 경성대학교 경쟁률 모니터링 1일차 보고자료 수기 이관 · 16:00 기준',
+    version: 'v1',
+    note: '기존 경성대학교 경쟁률 모니터링 1일차 보고자료 수기 이관 · 16:00 기준 · legacy:v1',
     runId: -20260907,
     rows: [
       ['경성대학교','유웨이',2579,391,2731,429,'16:01','정상'],
@@ -58,11 +59,32 @@ async function ensureBaseTables(env){
   )`).run();
 }
 
+async function alreadyImported(env, reportKey, seed){
+  const row=await env.DB.prepare(`
+    SELECT r.id, r.note, COUNT(i.id) AS item_count,
+      SUM(CASE WHEN s.run_id=? THEN 1 ELSE 0 END) AS legacy_count
+    FROM report_snapshots r
+    LEFT JOIN report_snapshot_items i ON i.report_id=r.id
+    LEFT JOIN competition_snapshots s ON s.id=i.snapshot_id
+    WHERE r.report_key=?
+    GROUP BY r.id
+  `).bind(seed.runId,reportKey).first();
+  if(!row) return null;
+  const complete=String(row.note||'')===seed.note
+    && Number(row.item_count||0)===seed.rows.length
+    && Number(row.legacy_count||0)===seed.rows.length;
+  return complete ? row : null;
+}
+
 async function importOne(env, reportDate, seed){
   await ensureBaseTables(env);
   const reportKey=`${reportDate}:daily`;
-  const reportIso=utcIso(reportDate,seed.reportTime);
+  const done=await alreadyImported(env,reportKey,seed);
+  if(done){
+    return {date:reportDate,reportKey,reportId:Number(done.id),items:seed.rows.length,source:'legacy-manual',unchanged:true};
+  }
 
+  const reportIso=utcIso(reportDate,seed.reportTime);
   await env.DB.prepare(`
     INSERT OR IGNORE INTO crawl_runs(id,trigger_type,started_at,finished_at,status,ok_count,error_count,note)
     VALUES(?,?,?,?,?,?,?,?)
@@ -70,7 +92,7 @@ async function importOne(env, reportDate, seed){
     seed.runId,'legacy_import',reportIso,reportIso,'archive',
     seed.rows.filter(r=>r[7]==='정상').length,
     seed.rows.filter(r=>r[7]!=='정상').length,
-    `legacy-report:${reportDate}`
+    `legacy-report:${reportDate}:${seed.version}`
   ).run();
 
   const snapshots=[];
@@ -133,7 +155,7 @@ async function importOne(env, reportDate, seed){
   `).bind(report.id,s.name,s.snapshotId,seed.reportTime,s.sourceTime?s.collectedAt:null));
   if(inserts.length) await env.DB.batch(inserts);
 
-  return {date:reportDate,reportKey,reportId:Number(report.id),items:snapshots.length,source:'legacy-manual'};
+  return {date:reportDate,reportKey,reportId:Number(report.id),items:snapshots.length,source:'legacy-manual',unchanged:false};
 }
 
 export async function importLegacyReports(env, onlyDate=null){
