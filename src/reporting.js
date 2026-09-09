@@ -129,6 +129,7 @@ async function universityNames(env){
 
 async function snapshotNearTarget(env, universityName, targetIso, requireNormal=false){
   const afterLimit = addMinutes(targetIso, 10);
+  const beforeLimit = addMinutes(targetIso, -10);
   const statusSql = requireNormal ? ` AND status='정상'` : '';
   let row = await env.DB.prepare(`
     SELECT * FROM competition_snapshots
@@ -139,9 +140,9 @@ async function snapshotNearTarget(env, universityName, targetIso, requireNormal=
 
   row = await env.DB.prepare(`
     SELECT * FROM competition_snapshots
-    WHERE university_name=? AND collected_at<?${statusSql}
+    WHERE university_name=? AND collected_at>=? AND collected_at<?${statusSql}
     ORDER BY collected_at DESC, id DESC LIMIT 1
-  `).bind(universityName, targetIso).first();
+  `).bind(universityName, beforeLimit, targetIso).first();
   return row || null;
 }
 
