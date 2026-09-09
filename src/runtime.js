@@ -2,6 +2,7 @@ import app from './db-stage.js';
 import { probeKyungsungSession, probeKyungsungLoginForm, probeKyungsungLoginScript } from './ks-session-probe.js';
 import { kyungsungLiveWithAccount, kyungsungCorrectionDiagnostics, kyungsungRepatriateDiagnostics } from './ks-auth.js';
 import { collectHybridAndStore } from './hybrid-store.js';
+import { importLegacyReports, legacyReportDates } from './legacy-report-import.js';
 import {
   processReportingAfterCollection,
   backfillReports,
@@ -13,7 +14,7 @@ import {
   getReportingSettings
 } from './reporting.js';
 
-const RELEASE = '2026-09-09-r10';
+const RELEASE = '2026-09-09-r11';
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
@@ -59,6 +60,7 @@ export default {
         scheduler:'direct-worker-call+server-reporting+jina-fallback+web-assets',
         d1Binding:Boolean(env.DB),
         kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
+        legacyReportDates:legacyReportDates(),
         checkedAt:new Date().toISOString()
       });
     }
@@ -93,6 +95,7 @@ export default {
           normalUniversities:rows.filter(r=>r.status === '정상').length,
           attentionCount:attention.length,
           attention,
+          legacyReportDates:legacyReportDates(),
           reporting:{
             initialized:reporting.initialized,
             reportCount:reporting.reportCount,
@@ -125,6 +128,15 @@ export default {
       }
     }
 
+    if(url.pathname === '/api/legacy/import'){
+      try{
+        const date=url.searchParams.get('date');
+        return jsonResponse(await importLegacyReports(env,date||null));
+      }catch(e){
+        return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500);
+      }
+    }
+
     if(url.pathname === '/api/reporting/status'){
       try { return jsonResponse(await reportingStatus(env)); }
       catch(e){ return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500); }
@@ -150,7 +162,8 @@ export default {
         const key=url.searchParams.get('key');
         return jsonResponse(key ? await reportDetail(env,key) : await listReports(env));
       }catch(e){
-        return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500); }
+        return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500);
+      }
     }
 
     if(url.pathname === '/api/history'){
