@@ -1,4 +1,4 @@
-import { collectHybrid as collectBase } from './hybrid-collector-ks-testurl.js';
+import { collectHybrid as collectBase } from './hybrid-collector-refresh-then-testurl.js';
 
 const TARGETS=new Set(['부산외국어대학교','신라대학교']);
 const MAX_SOURCE_AGE_MIN=25;
