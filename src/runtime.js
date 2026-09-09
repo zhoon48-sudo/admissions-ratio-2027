@@ -13,7 +13,7 @@ import {
   getReportingSettings
 } from './reporting.js';
 
-const RELEASE = '2026-09-09-r9';
+const RELEASE = '2026-09-09-r10';
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
@@ -56,7 +56,7 @@ export default {
         ok:true,
         service:'admissions-ratio-2027',
         release:RELEASE,
-        scheduler:'direct-worker-call+server-reporting+jina-fallback',
+        scheduler:'direct-worker-call+server-reporting+jina-fallback+web-assets',
         d1Binding:Boolean(env.DB),
         kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
         checkedAt:new Date().toISOString()
@@ -83,7 +83,7 @@ export default {
         return jsonResponse({
           ok:Boolean(db?.connected && db?.initialized && latest?.run),
           release:RELEASE,
-          scheduler:'direct-worker-call+server-reporting+jina-fallback',
+          scheduler:'direct-worker-call+server-reporting+jina-fallback+web-assets',
           d1Binding:Boolean(env.DB),
           kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
           db,
