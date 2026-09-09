@@ -110,6 +110,59 @@ function applyFallbackCorrection(result, fallback){
   };
 }
 
+async function lastVerifiedSnapshot(env, name, spec){
+  if(!env?.DB) return null;
+  try{
+    return await env.DB.prepare(`
+      SELECT * FROM competition_snapshots
+      WHERE university_name=?
+        AND status='정상'
+        AND run_id>0
+        AND total_quota=?
+        AND parser LIKE '%NO_REPATRIATE%'
+      ORDER BY collected_at DESC, id DESC
+      LIMIT 1
+    `).bind(name, spec.expectedTotalQuota).first();
+  }catch{
+    return null;
+  }
+}
+
+function splitExcludedNote(value){
+  return String(value || '').split(' | ').map(x=>x.trim()).filter(Boolean);
+}
+
+function applyLastVerifiedSnapshot(result, row, fallback){
+  const spec = TARGETS[result?.name];
+  if(!spec || !row) return result;
+
+  const innerQuota = Number(row.inner_quota);
+  const innerApply = Number(row.inner_apply);
+  const totalQuota = Number(row.total_quota);
+  const totalApply = Number(row.total_apply);
+  const outsideQuota = Number(row.outside_quota);
+  const outsideApply = Number(row.outside_apply);
+  if(![innerQuota,innerApply,totalQuota,totalApply,outsideQuota,outsideApply].every(Number.isFinite)) return result;
+  if(totalQuota !== spec.expectedTotalQuota) return result;
+
+  const fallbackError = fallback?.error ? ` · ${fallback.error}` : '';
+  return {
+    ...result,
+    level:'지연',
+    parser:`${row.parser || 'KS_SERVER_JINHAK_NO_REPATRIATE'}_LAST_VERIFIED`,
+    inner:metric(innerQuota, innerApply),
+    outside:metric(outsideQuota, outsideApply),
+    total:metric(totalQuota, totalApply),
+    excluded:[
+      ...splitExcludedNote(row.excluded_note),
+      '재외국민 제외값 일시조회 실패 · 직전 검증 완료 정상값 유지'
+    ],
+    warnings:[`재외국민 제외 지원인원 조회 지연으로 직전 정상값을 유지합니다${fallbackError}`],
+    sourceCollectedAt:row.collected_at || null,
+    repatriateFallback:fallback || null
+  };
+}
+
 export async function collectHybrid(env){
   const data = await collectBase(env);
   const pending = (data.results || []).filter(r => TARGETS[r.name] && String(r.parser || '').includes('REPATRIATE_APPLY_PENDING'));
@@ -122,7 +175,17 @@ export async function collectHybrid(env){
   }));
   const fallbackByName = new Map(fallbackPairs);
 
-  const results = (data.results || []).map(r => applyFallbackCorrection(r, fallbackByName.get(r.name)));
+  const corrected = (data.results || []).map(r => applyFallbackCorrection(r, fallbackByName.get(r.name)));
+  const results = [];
+  for(const r of corrected){
+    if(!TARGETS[r.name] || !String(r.parser || '').includes('REPATRIATE_APPLY_PENDING')){
+      results.push(r);
+      continue;
+    }
+    const previous = await lastVerifiedSnapshot(env, r.name, TARGETS[r.name]);
+    results.push(applyLastVerifiedSnapshot(r, previous, fallbackByName.get(r.name)));
+  }
+
   const ok = results.filter(r => r.level === '정상').length;
 
   return {
@@ -132,6 +195,7 @@ export async function collectHybrid(env){
       ...(data.summary || {}),
       universities:results.length,
       ok,
+      delayed:results.filter(r=>r.level==='지연').length,
       needVerify:results.filter(r=>r.level==='검증필요').length,
       failed:results.filter(r=>r.level==='접속실패').length
     },
