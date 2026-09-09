@@ -31,11 +31,6 @@ async function lastFreshPriority(env,name,expectedTotalQuota){
   }catch{return null}
 }
 
-function hasUsableMetrics(r){
-  return [r?.inner?.quota,r?.inner?.apply,r?.total?.quota,r?.total?.apply]
-    .map(Number).every(Number.isFinite);
-}
-
 async function protectPriorityTargets(env,data){
   const fresh=data.targetFresh||{};
   const out=[];
@@ -54,12 +49,9 @@ async function protectPriorityTargets(env,data){
       }
     }
 
-    if(hasUsableMetrics(r)){
-      out.push({...r,level:'지연',parser:`${r.parser||'JINHAK'}_FRESH_WAIT`,warnings:[`최신 진학사 상단표 조회 실패 · 기존 수집값 임시 유지 (${freshError})`]});
-      continue;
-    }
-
-    out.push({...r,level:'검증필요',parser:`${r.parser||'JINHAK'}_FRESH_REQUIRED`,warnings:[`최신 진학사 상단표를 확인하지 못했고 사용할 수 있는 기존값도 없습니다. (${freshError})`]});
+    // 부산외대·신라대는 경성대 서버의 과거/보정값을 최신값처럼 재사용하지 않습니다.
+    // 최신 전용수집도 실패하고 이전 직접검증값도 없으면 숫자를 비워 확인필요로 표시합니다.
+    out.push({...r,level:'검증필요',parser:`${r.parser||'JINHAK'}_FRESH_REQUIRED`,inner:null,outside:null,total:null,warnings:[`최신 진학사 상단표를 확인하지 못해 기존 집계값은 사용하지 않습니다. (${freshError})`]});
   }
   return {...data,results:out};
 }
