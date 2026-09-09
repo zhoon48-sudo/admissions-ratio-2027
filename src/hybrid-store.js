@@ -1,4 +1,4 @@
-import { collectHybrid } from './hybrid-collector-direct-targets.js';
+import { collectHybrid } from './hybrid-collector-silla-final.js';
 import { importLegacyReports } from './legacy-report-import.js';
 
 function diagnosticText(r){
@@ -48,7 +48,7 @@ export async function collectHybridAndStore(env, triggerType='manual'){
     const finishedAt = new Date().toISOString();
     const fallbackNames = Object.entries(data.repatriateFallback || {}).filter(([,v])=>v?.ok).map(([k])=>k);
     const delayedNames = data.results.filter(r=>r.level==='지연').map(r=>r.name);
-    const note = `hybrid=uway-direct+jinhak-ks${fallbackNames.length?'+jina-fallback':''}; roundId=${data.sourceRoundId ?? 'unknown'}${fallbackNames.length?`; fallback=${fallbackNames.join(',')}`:''}${delayedNames.length?`; delayed=${delayedNames.join(',')}`:''}`;
+    const note = `hybrid=uway-direct+jinhak-ks+silla-priority${fallbackNames.length?'+jina-fallback':''}; roundId=${data.sourceRoundId ?? 'unknown'}${fallbackNames.length?`; fallback=${fallbackNames.join(',')}`:''}${delayedNames.length?`; delayed=${delayedNames.join(',')}`:''}`;
 
     await env.DB.prepare(
       `UPDATE crawl_runs SET finished_at=?, status=?, ok_count=?, error_count=?, note=? WHERE id=?`
