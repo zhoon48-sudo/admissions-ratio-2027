@@ -1,4 +1,4 @@
-import { collectHybrid } from './hybrid-collector-silla-final.js';
+import { collectHybrid } from './hybrid-collector-priority-freshness.js';
 import { importLegacyReports } from './legacy-report-import.js';
 
 const PRIORITY_TARGETS = {
@@ -54,14 +54,12 @@ async function protectPriorityTargets(env,data){
       }
     }
 
-    // 아직 새 방식의 직접 검증값이 없더라도 화면을 0/0으로 비우지 않습니다.
-    // 기존 수집값을 지연 상태로 유지하고, 최신 원본 조회 실패 사유를 명확히 표시합니다.
     if(hasUsableMetrics(r)){
       out.push({...r,level:'지연',parser:`${r.parser||'JINHAK'}_FRESH_WAIT`,warnings:[`최신 진학사 상단표 조회 실패 · 기존 수집값 임시 유지 (${freshError})`]});
       continue;
     }
 
-    out.push({...r,level:'확인필요',parser:`${r.parser||'JINHAK'}_FRESH_REQUIRED`,warnings:[`최신 진학사 상단표를 확인하지 못했고 사용할 수 있는 기존값도 없습니다. (${freshError})`]});
+    out.push({...r,level:'검증필요',parser:`${r.parser||'JINHAK'}_FRESH_REQUIRED`,warnings:[`최신 진학사 상단표를 확인하지 못했고 사용할 수 있는 기존값도 없습니다. (${freshError})`]});
   }
   return {...data,results:out};
 }
