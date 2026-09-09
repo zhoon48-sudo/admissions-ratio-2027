@@ -13,7 +13,7 @@ import {
   getReportingSettings
 } from './reporting.js';
 
-const RELEASE = '2026-09-09-r7';
+const RELEASE = '2026-09-09-r8';
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
@@ -56,7 +56,7 @@ export default {
         ok:true,
         service:'admissions-ratio-2027',
         release:RELEASE,
-        scheduler:'direct-worker-call+server-reporting',
+        scheduler:'direct-worker-call+server-reporting+jina-fallback',
         d1Binding:Boolean(env.DB),
         kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
         checkedAt:new Date().toISOString()
@@ -83,7 +83,7 @@ export default {
         return jsonResponse({
           ok:Boolean(db?.connected && db?.initialized && latest?.run),
           release:RELEASE,
-          scheduler:'direct-worker-call+server-reporting',
+          scheduler:'direct-worker-call+server-reporting+jina-fallback',
           d1Binding:Boolean(env.DB),
           kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
           db,
@@ -150,8 +150,7 @@ export default {
         const key=url.searchParams.get('key');
         return jsonResponse(key ? await reportDetail(env,key) : await listReports(env));
       }catch(e){
-        return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500);
-      }
+        return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500); }
     }
 
     if(url.pathname === '/api/history'){
