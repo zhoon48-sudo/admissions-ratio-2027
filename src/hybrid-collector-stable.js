@@ -1,8 +1,8 @@
 import { collectHybrid as collectBase } from './hybrid-collector.js';
 
 const TARGETS = {
-  '부산외국어대학교': { quota: 20, expectedTotalQuota: 1554 },
-  '신라대학교': { quota: 5, expectedTotalQuota: 1472 }
+  '부산외국어대학교': { expectedTotalQuota: 1554 },
+  '신라대학교': { expectedTotalQuota: 1472 }
 };
 
 function rate(quota, apply){
@@ -13,42 +13,116 @@ function metric(quota, apply){
   return { quota, apply, rate: rate(quota, apply) };
 }
 
-function parseIntegerCell(value){
-  const s = String(value || '').replace(/[`*_\[\]()]/g, '').replace(/,/g, '').trim();
-  return /^\d+$/.test(s) ? Number(s) : null;
+function cleanReaderText(value){
+  return String(value || '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[`*_]/g, '')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function parseRepatriateFromReader(text, spec){
-  const lines = String(text || '').split(/\r?\n/);
-  const candidates = [];
+function integerTokens(line){
+  const normalized = String(line || '').replace(/\u00a0/g, ' ');
+  const out=[];
+  for(const m of normalized.matchAll(/(?:^|\s|\|)(\d{1,3}(?:,\d{3})*|\d+)(?=\s|\||$)/g)){
+    const n=Number(m[1].replace(/,/g,''));
+    if(Number.isFinite(n)) out.push(n);
+  }
+  return out;
+}
 
-  for(let i=0;i<lines.length;i++){
-    if(!/재외국민/.test(lines[i])) continue;
-    const block = [lines[i-1] || '', lines[i], lines[i+1] || ''].join(' ');
-    const cells = lines[i].includes('|') ? lines[i].split('|') : block.split(/\s{2,}|\t+/);
-    const nums = cells.map(parseIntegerCell).filter(v => v !== null);
+function summarySection(text){
+  const lines=String(text || '').split(/\r?\n/);
+  const start=lines.findIndex(line=>/전형별\s*경쟁률\s*현황/.test(cleanReaderText(line)));
+  if(start < 0) return [];
+  const out=[];
+  for(let i=start+1;i<lines.length;i++){
+    const clean=cleanReaderText(lines[i]);
+    if(i>start+1 && /^#{1,4}\s/.test(String(lines[i]).trim())) break;
+    if(clean) out.push(lines[i]);
+  }
+  return out;
+}
 
-    const quotaIndex = nums.indexOf(spec.quota);
-    if(quotaIndex >= 0 && nums[quotaIndex + 1] !== undefined){
-      candidates.push({ quota: spec.quota, apply: nums[quotaIndex + 1], rowText: lines[i].trim() });
-      continue;
-    }
+function parseSummaryFromReader(text, spec){
+  const lines=summarySection(text);
+  if(!lines.length) return null;
 
-    const cleaned = block.replace(/,/g, ' ');
-    const all = [...cleaned.matchAll(/(?:^|\D)(\d{1,6})(?=\D|$)/g)].map(m => Number(m[1]));
-    for(let j=0;j<all.length-1;j++){
-      if(all[j] === spec.quota){
-        candidates.push({ quota: spec.quota, apply: all[j+1], rowText: lines[i].trim() });
-        break;
-      }
-    }
+  const rows=[];
+  for(const rawLine of lines){
+    const rowText=cleanReaderText(rawLine);
+    if(!rowText || /모집인원.*지원인원.*경쟁률/.test(rowText)) continue;
+    if(/^[-|:\s]+$/.test(String(rawLine).trim())) continue;
+    if(/소계|총계/.test(rowText)) continue;
+
+    const nums=integerTokens(rawLine);
+    if(nums.length < 2) continue;
+
+    const quota=nums[0], apply=nums[1];
+    const labelPart=rowText
+      .replace(/\b\d{1,3}(?:,\d{3})*\b/g,' ')
+      .replace(/\d+\.\d+\s*:\s*1/g,' ')
+      .replace(/[|:\-]/g,' ')
+      .replace(/\s+/g,' ')
+      .trim();
+    if(!/[가-힣A-Za-z]/.test(labelPart)) continue;
+
+    rows.push({quota, apply, rowText, repatriate:/재외국민/.test(rowText)});
   }
 
-  const exact = candidates.find(x => x.quota === spec.quota && Number.isFinite(x.apply) && x.apply >= 0);
-  return exact || null;
+  if(!rows.length) return null;
+
+  const unique=[];
+  const seen=new Set();
+  for(const row of rows){
+    const key=`${row.rowText.replace(/\s+/g,'')}|${row.quota}|${row.apply}`;
+    if(seen.has(key)) continue;
+    seen.add(key);
+    unique.push(row);
+  }
+
+  const repatriateRows=unique.filter(r=>r.repatriate);
+  if(!repatriateRows.length) return null;
+
+  const sourceTotalQuota=unique.reduce((s,r)=>s+r.quota,0);
+  const sourceTotalApply=unique.reduce((s,r)=>s+r.apply,0);
+  const excludedQuota=repatriateRows.reduce((s,r)=>s+r.quota,0);
+  const excludedApply=repatriateRows.reduce((s,r)=>s+r.apply,0);
+  const correctedTotalQuota=sourceTotalQuota-excludedQuota;
+  const correctedTotalApply=sourceTotalApply-excludedApply;
+
+  if(correctedTotalQuota !== spec.expectedTotalQuota){
+    return {
+      ok:false,
+      source:'JINA_READER_SUMMARY',
+      error:`재외국민 제외 후 모집인원 ${correctedTotalQuota}명 ≠ 기준 ${spec.expectedTotalQuota}명`,
+      sourceTotalQuota,
+      sourceTotalApply,
+      excludedQuota,
+      excludedApply,
+      correctedTotalQuota,
+      correctedTotalApply,
+      repatriateRows:repatriateRows.map(r=>r.rowText)
+    };
+  }
+
+  return {
+    ok:true,
+    source:'JINA_READER_SUMMARY',
+    sourceTotalQuota,
+    sourceTotalApply,
+    excludedQuota,
+    excludedApply,
+    correctedTotalQuota,
+    correctedTotalApply,
+    rowCount:unique.length,
+    repatriateRows:repatriateRows.map(r=>r.rowText)
+  };
 }
 
-async function fetchViaJinaReader(url, spec){
+async function fetchSummaryViaJina(url, spec){
   try{
     const response = await fetch(`https://r.jina.ai/${url}`, {
       headers: {
@@ -57,57 +131,63 @@ async function fetchViaJinaReader(url, spec){
         'X-No-Cache': 'true',
         'X-Engine': 'browser'
       },
-      redirect: 'follow'
+      redirect:'follow'
     });
-    const text = await response.text();
+    const text=await response.text();
     if(!response.ok){
-      return { ok:false, source:'JINA_READER', error:`Jina Reader HTTP ${response.status}` };
+      return {ok:false,source:'JINA_READER_SUMMARY',error:`Jina Reader HTTP ${response.status}`};
     }
-    const parsed = parseRepatriateFromReader(text, spec);
+    const parsed=parseSummaryFromReader(text,spec);
     if(!parsed){
-      return { ok:false, source:'JINA_READER', error:'Jina Reader 응답에서 재외국민 행을 찾지 못했습니다.' };
+      return {ok:false,source:'JINA_READER_SUMMARY',error:'전형별 경쟁률 현황에서 재외국민 전형행을 찾지 못했습니다.'};
     }
-    return { ok:true, source:'JINA_READER', ...parsed };
+    return parsed;
   }catch(e){
-    return { ok:false, source:'JINA_READER', error:e instanceof Error ? e.message : String(e) };
+    return {ok:false,source:'JINA_READER_SUMMARY',error:e instanceof Error?e.message:String(e)};
   }
 }
 
-function applyFallbackCorrection(result, fallback){
-  const spec = TARGETS[result?.name];
-  if(!spec || !fallback?.ok || !result?.total || !result?.inner) return result;
+function unrelatedWarnings(result){
+  return (result?.warnings || []).filter(w=>!/재외국민/.test(String(w)));
+}
 
-  // 기본 collector가 이미 정상 처리했다면 그대로 둡니다.
-  if(result.level === '정상' && !String(result.parser || '').includes('REPATRIATE_APPLY_PENDING')) return result;
+function unrelatedExcluded(result){
+  return (result?.excluded || []).filter(w=>!/재외국민/.test(String(w)));
+}
 
-  // pending 상태의 기본 collector는 모집인원 20/5명만 이미 제외하고 지원인원은 원본 전체값을 유지합니다.
-  const totalQuota = Number(result.total.quota);
-  const totalApply = Number(result.total.apply);
-  const innerQuota = Number(result.inner.quota);
-  const innerApply = Number(result.inner.apply);
-  if(![totalQuota,totalApply,innerQuota,innerApply].every(Number.isFinite)) return result;
-  if(totalQuota !== spec.expectedTotalQuota) return result;
-  if(fallback.quota !== spec.quota || fallback.apply > totalApply) return result;
+function applySummaryCorrection(result, summary){
+  const spec=TARGETS[result?.name];
+  if(!spec || !summary?.ok || !result?.inner) return result;
 
-  const correctedTotalApply = totalApply - fallback.apply;
-  if(correctedTotalApply < innerApply) return result;
-  const outsideQuota = totalQuota - innerQuota;
-  const outsideApply = correctedTotalApply - innerApply;
+  const innerQuota=Number(result.inner.quota);
+  const innerApply=Number(result.inner.apply);
+  const totalQuota=Number(summary.correctedTotalQuota);
+  const totalApply=Number(summary.correctedTotalApply);
+  if(![innerQuota,innerApply,totalQuota,totalApply].every(Number.isFinite)) return result;
+  if(totalQuota !== spec.expectedTotalQuota || totalQuota < innerQuota || totalApply < innerApply) return result;
+
+  const outsideQuota=totalQuota-innerQuota;
+  const outsideApply=totalApply-innerApply;
+  const warnings=unrelatedWarnings(result);
 
   return {
     ...result,
-    level:'정상',
-    parser:String(result.parser || 'KS_SERVER_JINHAK')
-      .replace('_REPATRIATE_APPLY_PENDING','') + '_NO_REPATRIATE_JINA',
-    total:metric(totalQuota, correctedTotalApply),
-    outside:metric(outsideQuota, outsideApply),
+    level:warnings.length ? '검증필요' : '정상',
+    parser:'KS_SERVER_JINHAK_JINHAK_SUMMARY_KEYWORD_EXCLUDE',
+    total:metric(totalQuota,totalApply),
+    outside:metric(outsideQuota,outsideApply),
     excluded:[
-      ...(result.excluded || []).filter(x => !/지원인원 동적 제외 대기/.test(String(x))),
-      `재외국민 Jina 보조 제외: 모집 ${fallback.quota}명 / 지원 ${fallback.apply}명`
+      ...unrelatedExcluded(result),
+      `재외국민 전형행 키워드 제외: 모집 ${summary.excludedQuota}명 / 지원 ${summary.excludedApply}명`
     ],
-    warnings:[],
-    repatriateFallback:fallback
+    warnings,
+    repatriateSummary:summary
   };
+}
+
+function baseIsSafelyCorrected(result){
+  const parser=String(result?.parser || '');
+  return result?.level==='정상' && /NO_REPATRIATE_JINHAK/.test(parser);
 }
 
 async function lastVerifiedSnapshot(env, name, spec){
@@ -119,10 +199,10 @@ async function lastVerifiedSnapshot(env, name, spec){
         AND status='정상'
         AND run_id>0
         AND total_quota=?
-        AND parser LIKE '%NO_REPATRIATE%'
+        AND (parser LIKE '%NO_REPATRIATE%' OR parser LIKE '%KEYWORD_EXCLUDE%')
       ORDER BY collected_at DESC, id DESC
       LIMIT 1
-    `).bind(name, spec.expectedTotalQuota).first();
+    `).bind(name,spec.expectedTotalQuota).first();
   }catch{
     return null;
   }
@@ -132,65 +212,93 @@ function splitExcludedNote(value){
   return String(value || '').split(' | ').map(x=>x.trim()).filter(Boolean);
 }
 
-function applyLastVerifiedSnapshot(result, row, fallback){
-  const spec = TARGETS[result?.name];
+function applyLastVerifiedSnapshot(result,row,summary){
+  const spec=TARGETS[result?.name];
   if(!spec || !row) return result;
 
-  const innerQuota = Number(row.inner_quota);
-  const innerApply = Number(row.inner_apply);
-  const totalQuota = Number(row.total_quota);
-  const totalApply = Number(row.total_apply);
-  const outsideQuota = Number(row.outside_quota);
-  const outsideApply = Number(row.outside_apply);
+  const innerQuota=Number(row.inner_quota);
+  const innerApply=Number(row.inner_apply);
+  const totalQuota=Number(row.total_quota);
+  const totalApply=Number(row.total_apply);
+  const outsideQuota=Number(row.outside_quota);
+  const outsideApply=Number(row.outside_apply);
   if(![innerQuota,innerApply,totalQuota,totalApply,outsideQuota,outsideApply].every(Number.isFinite)) return result;
   if(totalQuota !== spec.expectedTotalQuota) return result;
 
-  const fallbackError = fallback?.error ? ` · ${fallback.error}` : '';
+  const detail=summary?.error?` · ${summary.error}`:'';
   return {
     ...result,
     level:'지연',
-    parser:`${row.parser || 'KS_SERVER_JINHAK_NO_REPATRIATE'}_LAST_VERIFIED`,
-    inner:metric(innerQuota, innerApply),
-    outside:metric(outsideQuota, outsideApply),
-    total:metric(totalQuota, totalApply),
+    parser:`${row.parser || 'KS_SERVER_JINHAK_JINHAK_SUMMARY_KEYWORD_EXCLUDE'}_LAST_VERIFIED`,
+    inner:metric(innerQuota,innerApply),
+    outside:metric(outsideQuota,outsideApply),
+    total:metric(totalQuota,totalApply),
     excluded:[
       ...splitExcludedNote(row.excluded_note),
-      '재외국민 제외값 일시조회 실패 · 직전 검증 완료 정상값 유지'
+      '재외국민 전형표 일시조회 실패 · 직전 검증 완료 정상값 유지'
     ],
-    warnings:[`재외국민 제외 지원인원 조회 지연으로 직전 정상값을 유지합니다${fallbackError}`],
+    warnings:[`재외국민 전형표 조회 지연으로 직전 정상값을 유지합니다${detail}`],
     sourceCollectedAt:row.collected_at || null,
-    repatriateFallback:fallback || null
+    repatriateSummary:summary || null
+  };
+}
+
+function markSummaryPending(result,summary){
+  return {
+    ...result,
+    level:'검증필요',
+    parser:`${String(result?.parser || 'KS_SERVER_JINHAK').replace(/_REPATRIATE_[A-Z_]+/g,'')}_REPATRIATE_SUMMARY_PENDING`,
+    warnings:[
+      ...unrelatedWarnings(result),
+      `재외국민 전형표를 확인하지 못했습니다${summary?.error?` (${summary.error})`:''}`
+    ],
+    repatriateSummary:summary || null
   };
 }
 
 export async function collectHybrid(env){
-  const data = await collectBase(env);
-  const pending = (data.results || []).filter(r => TARGETS[r.name] && String(r.parser || '').includes('REPATRIATE_APPLY_PENDING'));
-  if(!pending.length) return data;
+  const data=await collectBase(env);
+  const targetResults=(data.results || []).filter(r=>TARGETS[r.name]);
+  if(!targetResults.length) return data;
 
-  const fallbackPairs = await Promise.all(pending.map(async r => {
-    const spec = TARGETS[r.name];
-    const fb = await fetchViaJinaReader(r.url, spec);
-    return [r.name, fb];
-  }));
-  const fallbackByName = new Map(fallbackPairs);
+  const summaryPairs=await Promise.all(targetResults.map(async r=>[
+    r.name,
+    await fetchSummaryViaJina(r.url,TARGETS[r.name])
+  ]));
+  const summaryByName=new Map(summaryPairs);
 
-  const corrected = (data.results || []).map(r => applyFallbackCorrection(r, fallbackByName.get(r.name)));
-  const results = [];
-  for(const r of corrected){
-    if(!TARGETS[r.name] || !String(r.parser || '').includes('REPATRIATE_APPLY_PENDING')){
-      results.push(r);
+  const results=[];
+  for(const result of (data.results || [])){
+    const spec=TARGETS[result.name];
+    if(!spec){
+      results.push(result);
       continue;
     }
-    const previous = await lastVerifiedSnapshot(env, r.name, TARGETS[r.name]);
-    results.push(applyLastVerifiedSnapshot(r, previous, fallbackByName.get(r.name)));
+
+    const summary=summaryByName.get(result.name);
+    if(summary?.ok){
+      results.push(applySummaryCorrection(result,summary));
+      continue;
+    }
+
+    if(baseIsSafelyCorrected(result)){
+      results.push(result);
+      continue;
+    }
+
+    const previous=await lastVerifiedSnapshot(env,result.name,spec);
+    if(previous){
+      results.push(applyLastVerifiedSnapshot(result,previous,summary));
+      continue;
+    }
+
+    results.push(markSummaryPending(result,summary));
   }
 
-  const ok = results.filter(r => r.level === '정상').length;
-
+  const ok=results.filter(r=>r.level==='정상').length;
   return {
     ...data,
-    repatriateFallback:Object.fromEntries(fallbackPairs),
+    repatriateSummary:Object.fromEntries(summaryPairs),
     summary:{
       ...(data.summary || {}),
       universities:results.length,
