@@ -1,6 +1,6 @@
 import app from './db-stage.js';
 import { probeKyungsungSession, probeKyungsungLoginForm, probeKyungsungLoginScript } from './ks-session-probe.js';
-import { kyungsungLiveWithAccount, kyungsungCorrectionDiagnostics } from './ks-auth.js';
+import { kyungsungLiveWithAccount, kyungsungCorrectionDiagnostics, kyungsungRepatriateDiagnostics } from './ks-auth.js';
 import { collectHybridAndStore } from './hybrid-store.js';
 import {
   processReportingAfterCollection,
@@ -13,7 +13,7 @@ import {
   getReportingSettings
 } from './reporting.js';
 
-const RELEASE = '2026-09-09-r6';
+const RELEASE = '2026-09-09-r7';
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
@@ -157,6 +157,17 @@ export default {
     if(url.pathname === '/api/history'){
       try { return jsonResponse(await historyData(env,url.searchParams)); }
       catch(e){ return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500); }
+    }
+
+    if (url.pathname === '/debug/ks-repatriate') {
+      try {
+        return jsonResponse(await kyungsungRepatriateDiagnostics(env));
+      } catch (e) {
+        return jsonResponse({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e)
+        }, 500);
+      }
     }
 
     if (url.pathname === '/debug/ks-corrections') {
