@@ -1,4 +1,5 @@
 import { collectHybrid } from './hybrid-collector-stable.js';
+import { importLegacyReports } from './legacy-report-import.js';
 
 function diagnosticText(r){
   if(r.warnings?.length) return r.warnings.join(' | ');
@@ -58,6 +59,13 @@ export async function collectHybridAndStore(env, triggerType='manual'){
       runId
     ).run();
 
+    let legacyImport=null;
+    try{
+      legacyImport=await importLegacyReports(env);
+    }catch(importError){
+      legacyImport={ok:false,error:importError instanceof Error?importError.message:String(importError)};
+    }
+
     return {
       saved:true,
       runId,
@@ -69,7 +77,8 @@ export async function collectHybridAndStore(env, triggerType='manual'){
       snapshotsSaved:data.results.length,
       sourceRoundId:data.sourceRoundId ?? null,
       collectionMode:fallbackNames.length?'hybrid-resilient':'hybrid',
-      fallbackUniversities:fallbackNames
+      fallbackUniversities:fallbackNames,
+      legacyImport
     };
   }catch(e){
     const finishedAt = new Date().toISOString();
