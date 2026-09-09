@@ -83,6 +83,17 @@ function parseDirectSummary(html, spec){
     else if(first==='정원외') scope='outside';
 
     if(/소계|합계|총계/.test(rowText)) continue;
+
+    const labelCells=cells.filter(c=>{
+      const t=String(c||'').trim();
+      if(!t) return false;
+      if(/^(정원내|정원외)$/.test(t.replace(/\s+/g,''))) return false;
+      if(intCell(t)!==null) return false;
+      if(/^\d+(?:\.\d+)?\s*:\s*1$/.test(t)) return false;
+      return true;
+    });
+    if(!labelCells.some(c=>/[가-힣A-Za-z]/.test(c))) continue;
+
     const nums=cells.map(intCell).filter(v=>v!==null);
     if(nums.length<2 || !scope) continue;
 
