@@ -27,9 +27,12 @@ const NAME_MAP = {
   '국립창원대':'창원대학교'
 };
 
+// 재외국민은 모니터링 집계에서 제외합니다.
+// 지원인원은 실시간으로 변하므로 고정 숫자를 차감하지 않습니다.
+// 경성대 원천 서버가 추후 동적 제외값을 제공하면 아래 호환 필드로 자동 반영합니다.
 const EXCLUDE_REPATRIATE = {
-  '부산외국어대학교': {quota:20, apply:2, expectedTotalQuota:1554},
-  '신라대학교': {quota:5, apply:0, expectedTotalQuota:1472}
+  '부산외국어대학교': {quota:20, expectedTotalQuota:1554},
+  '신라대학교': {quota:5, expectedTotalQuota:1472}
 };
 
 function firstCookie(headers){
@@ -53,6 +56,15 @@ function rate(quota, apply){
 function metric(quota, apply){
   if (!Number.isFinite(quota) || !Number.isFinite(apply)) return null;
   return { quota, apply, rate: rate(quota, apply) };
+}
+
+function firstFinite(...values){
+  for(const value of values){
+    if(value === null || value === undefined || value === '') continue;
+    const n = Number(value);
+    if(Number.isFinite(n) && n >= 0) return n;
+  }
+  return null;
 }
 
 async function jsonOrNull(response){
@@ -204,12 +216,38 @@ function fromKyungsung(u, row){
 
   const repatriate = EXCLUDE_REPATRIATE[u.name];
   if(repatriate && [tq,ta].every(Number.isFinite)){
-    tq -= repatriate.quota;
-    ta -= repatriate.apply;
-    excluded.push(`재외국민 제외: 모집 ${repatriate.quota}명 / 지원 ${repatriate.apply}명`);
-    correctionTag += '_NO_REPATRIATE';
+    const rawTotalQuota = tq;
+    const upstreamExcluded = tq === repatriate.expectedTotalQuota;
+    const rawIncludesRepatriate = tq === repatriate.expectedTotalQuota + repatriate.quota;
+    const dynamicApply = firstFinite(
+      row.repatriateApply,
+      row.repatriate_apply,
+      row.excludedRepatriateApply,
+      row.excluded_repatriate_apply
+    );
+
+    if(upstreamExcluded){
+      excluded.push(`재외국민 원천 제외 확인: 모집 ${repatriate.quota}명`);
+      correctionTag += '_REPATRIATE_UPSTREAM';
+    }else if(rawIncludesRepatriate && dynamicApply !== null){
+      tq -= repatriate.quota;
+      ta -= dynamicApply;
+      excluded.push(`재외국민 동적 제외: 모집 ${repatriate.quota}명 / 지원 ${dynamicApply}명`);
+      correctionTag += '_NO_REPATRIATE';
+    }else if(rawIncludesRepatriate){
+      // 모집인원은 정확히 제외할 수 있지만, 지원인원은 실시간 변동값을 원천 서버가 제공해야 합니다.
+      // 과거 특정 시각의 지원인원을 고정 차감하면 시간이 지날수록 잘못된 값이 되므로 정상 처리하지 않습니다.
+      tq -= repatriate.quota;
+      excluded.push(`재외국민 모집인원 ${repatriate.quota}명 제외 / 지원인원 동적 제외 대기`);
+      warnings.push('재외국민 지원인원 동적 제외값이 원천 서버에 없어 전체 지원인원은 검증이 필요합니다.');
+      correctionTag += '_REPATRIATE_APPLY_PENDING';
+    }else{
+      warnings.push(`재외국민 제외 기준 모집인원 확인 필요: 원천 전체 ${rawTotalQuota}명 / 기대 ${repatriate.expectedTotalQuota}명`);
+      correctionTag += '_REPATRIATE_QUOTA_CHECK';
+    }
+
     if(tq !== repatriate.expectedTotalQuota){
-      warnings.push(`재외국민 제외 후 전체 모집인원 ${tq}명 확인 필요`);
+      warnings.push(`재외국민 제외 후 전체 모집인원 ${tq}명 ≠ 기준 ${repatriate.expectedTotalQuota}명`);
     }
   }
 
