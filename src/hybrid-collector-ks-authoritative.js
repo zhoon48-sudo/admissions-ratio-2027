@@ -13,14 +13,38 @@ function n(...values){
 }
 function rate(q,a){ return q > 0 ? +(a/q).toFixed(2) : null; }
 function metric(q,a){ return Number.isFinite(q) && Number.isFinite(a) ? {quota:q,apply:a,rate:rate(q,a)} : null; }
+
+// 경성대 서버 stamp_()는 "yyyy-MM-dd HH:mm:ss" 형식의 한국시간(KST)을 반환합니다.
+// 시간대 표기가 없는 이 문자열을 new Date(raw)로 먼저 읽으면 Worker에서 UTC로 해석되어
+// 화면에서 +9시간 밀리는 문제가 있으므로, KST 형식을 먼저 명시적으로 처리합니다.
 function sourceIso(row,fallback){
   const raw=row?.collectedAt || row?.sourcePublished || row?.published || row?.attemptedAt || fallback || '';
   if(!raw) return null;
-  const d=new Date(raw);
+  const s=String(raw).trim();
+
+  // 2026-09-09 15:00:00 / 2026. 9. 9. 15:00:00 등 한국시간 문자열
+  let m=s.match(/(20\d{2})[-.]\s*(\d{1,2})[-.]\s*(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if(m){
+    const iso=`${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}T${String(m[4]).padStart(2,'0')}:${m[5]}:${String(m[6]||'00').padStart(2,'0')}+09:00`;
+    const d=new Date(iso);
+    if(!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+
+  // 오전/오후가 포함된 경우
+  m=s.match(/(20\d{2})[-.]\s*(\d{1,2})[-.]\s*(\d{1,2})\s*(오전|오후)\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if(m){
+    let hour=Number(m[5]);
+    if(m[4]==='오후'&&hour<12) hour+=12;
+    if(m[4]==='오전'&&hour===12) hour=0;
+    const iso=`${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}T${String(hour).padStart(2,'0')}:${m[6]}:${String(m[7]||'00').padStart(2,'0')}+09:00`;
+    const d=new Date(iso);
+    if(!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+
+  // 이미 Z 또는 +09:00 등의 시간대가 포함된 표준 ISO 값은 그대로 처리
+  const d=new Date(s);
   if(!Number.isNaN(d.getTime())) return d.toISOString();
-  const m=String(raw).match(/(20\d{2})[-.]\s*(\d{1,2})[-.]\s*(\d{1,2})\s*(\d{1,2}):(\d{2})/);
-  if(!m) return null;
-  return new Date(`${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}T${String(m[4]).padStart(2,'0')}:${m[5]}:00+09:00`).toISOString();
+  return null;
 }
 
 export async function collectHybrid(env){
