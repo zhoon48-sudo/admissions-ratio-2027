@@ -1,4 +1,4 @@
-import { collectHybrid } from './hybrid-collector-stable.js';
+import { collectHybrid } from './hybrid-collector-direct-targets.js';
 import { importLegacyReports } from './legacy-report-import.js';
 
 function diagnosticText(r){
