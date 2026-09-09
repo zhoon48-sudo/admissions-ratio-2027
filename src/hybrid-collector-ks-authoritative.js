@@ -1,5 +1,5 @@
 import { collectHybrid as collectBase } from './hybrid-collector.js';
-import { kyungsungCorrectionDiagnostics } from './ks-auth.js';
+import { fetchKyungsungTargetRows } from './ks-live-targets.js';
 
 const TARGETS = new Set(['부산외국어대학교','신라대학교']);
 
@@ -13,14 +13,8 @@ function n(...values){
 }
 function rate(q,a){ return q > 0 ? +(a/q).toFixed(2) : null; }
 function metric(q,a){ return Number.isFinite(q) && Number.isFinite(a) ? {quota:q,apply:a,rate:rate(q,a)} : null; }
-function canonical(v){
-  const s=String(v||'').replace(/\s+/g,'');
-  if(/^부산외(국어)?대(학교)?$/.test(s)) return '부산외국어대학교';
-  if(/^신라대(학교)?$/.test(s)) return '신라대학교';
-  return s;
-}
-function sourceIso(row){
-  const raw=row?.collectedAt || row?.sourcePublished || row?.published || row?.attemptedAt || '';
+function sourceIso(row,fallback){
+  const raw=row?.collectedAt || row?.sourcePublished || row?.published || row?.attemptedAt || fallback || '';
   if(!raw) return null;
   const d=new Date(raw);
   if(!Number.isNaN(d.getTime())) return d.toISOString();
@@ -30,30 +24,33 @@ function sourceIso(row){
 }
 
 export async function collectHybrid(env){
-  const [base,diag] = await Promise.all([
+  const [base,live] = await Promise.all([
     collectBase(env),
-    kyungsungCorrectionDiagnostics(env).catch(e=>({ok:false,error:e instanceof Error?e.message:String(e),rows:[]}))
+    fetchKyungsungTargetRows(env)
   ]);
 
-  const rows=new Map((Array.isArray(diag?.rows)?diag.rows:[]).map(r=>[canonical(r.univName),r]));
+  const rows=new Map((live.rows||[]).map(r=>[r.canonicalName,r]));
   const authoritative={};
   const results=(base.results||[]).map(r=>{
     if(!TARGETS.has(r.name)) return r;
     const row=rows.get(r.name);
-    if(!row) return {...r,warnings:[...(r.warnings||[]),'경성대 서버 cmp_live에서 최신 행을 찾지 못했습니다.']};
+    if(!row){
+      return {...r,level:r.level==='정상'?'지연':r.level,warnings:[...(r.warnings||[]),'경성대 서버 cmp_live 대상 행 조회 실패 · 기존값 유지']};
+    }
 
     const iq=n(row.innerQuota,row.inQuota);
     const ia=n(row.innerApply,row.innerApplicants,row.inApply);
     const tq=n(row.quota,row.totalQuota);
     const ta=n(row.apply,row.totalApply);
     if(![iq,ia,tq,ta].every(Number.isFinite) || iq>tq || ia>ta){
-      return {...r,warnings:[...(r.warnings||[]),'경성대 서버 cmp_live 숫자 검증에 실패했습니다.']};
+      return {...r,level:r.level==='정상'?'지연':r.level,warnings:[...(r.warnings||[]),'경성대 서버 cmp_live 숫자 검증 실패 · 기존값 유지']};
     }
 
     const oq=tq-iq, oa=ta-ia;
     const warning=String(row.lastErr||'').trim();
-    const sourceCollectedAt=sourceIso(row) || r.sourceCollectedAt || base.checkedAt || new Date().toISOString();
+    const sourceCollectedAt=sourceIso(row,live.collectedAt) || r.sourceCollectedAt || base.checkedAt || new Date().toISOString();
     authoritative[r.name]={ok:true,source:'KS_CMP_LIVE',innerQuota:iq,innerApply:ia,totalQuota:tq,totalApply:ta,sourceCollectedAt};
+
     return {
       ...r,
       level:warning?'지연':'정상',
@@ -70,7 +67,7 @@ export async function collectHybrid(env){
   return {
     ...base,
     targetFresh:{...(base.targetFresh||{}),...authoritative},
-    ksAuthoritative:{ok:Boolean(diag?.ok),error:diag?.error||null,targets:authoritative},
+    ksAuthoritative:{ok:Boolean(live.ok),error:live.error||null,targets:authoritative},
     results,
     summary:{
       ...(base.summary||{}),
