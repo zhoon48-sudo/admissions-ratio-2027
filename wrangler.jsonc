@@ -2,13 +2,25 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "admissions-ratio-2027-test",
   "main": "src/runtime.js",
-  "compatibility_date": "2026-09-08",
+  "compatibility_date": "2026-09-09",
   "compatibility_flags": ["global_fetch_strictly_public"],
   "placement": {
     "region": "aws:ap-northeast-2"
   },
   "triggers": {
     "crons": ["*/5 * * * *"]
+  },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*",
+      "/collect/*",
+      "/debug/*",
+      "/db/*",
+      "/check",
+      "/health"
+    ]
   },
   "d1_databases": [
     {
