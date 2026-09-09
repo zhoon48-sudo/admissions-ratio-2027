@@ -3,7 +3,7 @@ import { probeKyungsungSession, probeKyungsungLoginForm, probeKyungsungLoginScri
 import { kyungsungLiveWithAccount, kyungsungCorrectionDiagnostics } from './ks-auth.js';
 import { collectHybridAndStore } from './hybrid-store.js';
 
-const RELEASE = '2026-09-09-r4';
+const RELEASE = '2026-09-09-r5';
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
