@@ -3,8 +3,6 @@ import { probeKyungsungSession, probeKyungsungLoginForm, probeKyungsungLoginScri
 import { kyungsungLiveWithAccount, kyungsungCorrectionDiagnostics } from './ks-auth.js';
 import { collectHybridAndStore } from './hybrid-store.js';
 
-const PUBLIC_COLLECT_URL = 'https://admissions-ratio-2027-test.zhoon48.workers.dev/collect/once?source=cron';
-
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -110,16 +108,9 @@ export default {
 
   async scheduled(controller, env, ctx) {
     ctx.waitUntil((async () => {
-      const response = await fetch(PUBLIC_COLLECT_URL, {
-        headers: {
-          'Accept': 'application/json',
-          'X-Admissions-Trigger': 'cron'
-        }
-      });
-      const body = await response.json();
-
-      if (!response.ok || !body?.saved || !body?.runId) {
-        throw new Error(`자동수집 실패: ${JSON.stringify(body)}`);
+      const result = await collectHybridAndStore(env, 'cron');
+      if (!result?.saved || !result?.runId) {
+        throw new Error(`자동수집 실패: ${JSON.stringify(result)}`);
       }
     })());
   }
