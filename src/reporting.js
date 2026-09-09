@@ -346,7 +346,7 @@ export async function historyData(env, searchParams){
     binds.push(to.includes('T') ? to : utcIso(to,'23:59'));
     sql += ` AND collected_at<=?`;
   }
-  sql += ` ORDER BY collected_at ASC, university_name ASC LIMIT 12000`;
+  sql += ` ORDER BY collected_at ASC, university_name ASC LIMIT 40000`;
   const rows = await env.DB.prepare(sql).bind(...binds).all();
   return {points:rows.results||[], hours, from:from||null, to:to||null};
 }
