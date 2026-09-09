@@ -1,5 +1,6 @@
 const API='https://ipsiu.ks.ac.kr/ipsi/servlet/ipsi.Manager';
 const LOGIN=API+'?cmd=brf_login';
+const BOARD='https://ipsiu.ks.ac.kr/ipsi/cmp/cmp_board_view.jsp?pub=1';
 
 function cookies(headers){
   const raw=headers.get('set-cookie')||'';
@@ -45,7 +46,7 @@ async function sessionFetch(session,query,options={}){
     headers:{
       'Accept':options.accept||'application/json,text/plain,*/*',
       'X-Requested-With':'XMLHttpRequest',
-      'Referer':options.referer||'https://ipsiu.ks.ac.kr/ipsi/cmp/cmp_board_view.jsp?pub=1',
+      'Referer':options.referer||BOARD,
       ...(options.contentType?{'Content-Type':options.contentType}:{}),
       ...(session.cookie?{'Cookie':session.cookie}:{}),
       ...(options.headers||{})
@@ -159,4 +160,64 @@ export async function kyungsungRepatriateDiagnostics(env){
   }
 
   return {ok:results.every(r=>r.ok),loginStatus:session.loginStatus,results};
+}
+
+function unique(arr){return [...new Set(arr.filter(Boolean))];}
+
+export async function kyungsungBoardHistoryDiscovery(env){
+  const session=await loginSession(env);
+  if(!session.ok)return session;
+
+  const page=await fetch(BOARD,{
+    headers:{
+      'User-Agent':'Mozilla/5.0',
+      'Accept':'text/html,application/xhtml+xml,*/*',
+      ...(session.cookie?{'Cookie':session.cookie}:{})
+    },
+    redirect:'follow'
+  });
+  const html=await page.text();
+  const scriptSrcs=unique([...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(m=>m[1]));
+  const cmdStrings=unique([...html.matchAll(/cmd=([A-Za-z0-9_\-]+)/g)].map(m=>m[1]));
+  const actionStrings=unique([...html.matchAll(/action=([A-Za-z0-9_\-]+)/g)].map(m=>m[1]));
+  const interesting=[];
+  const re=/(snapshot|history|archive|report|daily|save|load|cmp_[A-Za-z0-9_\-]+|2026-09-0[78])/ig;
+  let match;
+  while((match=re.exec(html))&&interesting.length<80){
+    const start=Math.max(0,match.index-180),end=Math.min(html.length,match.index+320);
+    interesting.push(html.slice(start,end).replace(/\s+/g,' '));
+  }
+
+  const scripts=[];
+  for(const src of scriptSrcs.slice(0,20)){
+    try{
+      const url=new URL(src,BOARD).toString();
+      const res=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0',...(session.cookie?{'Cookie':session.cookie}:{})},redirect:'follow'});
+      const text=await res.text();
+      const commands=unique([...text.matchAll(/cmd=([A-Za-z0-9_\-]+)/g)].map(m=>m[1]));
+      const actions=unique([...text.matchAll(/action=([A-Za-z0-9_\-]+)/g)].map(m=>m[1]));
+      const hits=[];
+      const rr=/(snapshot|history|archive|report|daily|cmp_[A-Za-z0-9_\-]+)/ig;
+      let mm;
+      while((mm=rr.exec(text))&&hits.length<30){
+        hits.push(text.slice(Math.max(0,mm.index-120),Math.min(text.length,mm.index+260)).replace(/\s+/g,' '));
+      }
+      scripts.push({src,url,httpStatus:res.status,length:text.length,commands,actions,hits});
+    }catch(e){
+      scripts.push({src,error:e instanceof Error?e.message:String(e)});
+    }
+  }
+
+  return {
+    ok:page.ok,
+    loginStatus:session.loginStatus,
+    pageStatus:page.status,
+    contentType:page.headers.get('content-type')||'',
+    length:html.length,
+    scriptSrcs,
+    cmdStrings,
+    actionStrings,
+    interesting,
+    scripts
+  };
 }
