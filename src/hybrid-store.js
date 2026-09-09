@@ -31,6 +31,11 @@ async function lastFreshPriority(env,name,expectedTotalQuota){
   }catch{return null}
 }
 
+function hasUsableMetrics(r){
+  return [r?.inner?.quota,r?.inner?.apply,r?.total?.quota,r?.total?.apply]
+    .map(Number).every(Number.isFinite);
+}
+
 async function protectPriorityTargets(env,data){
   const fresh=data.targetFresh||{};
   const out=[];
@@ -49,7 +54,14 @@ async function protectPriorityTargets(env,data){
       }
     }
 
-    out.push({...r,level:'검증필요',parser:`${r.parser||'JINHAK'}_FRESH_REQUIRED`,inner:null,outside:null,total:null,warnings:[`최신 진학사 상단표를 확인하지 못해 과거 보정값은 사용하지 않습니다. (${freshError})`]});
+    // 아직 새 방식의 직접 검증값이 없더라도 화면을 0/0으로 비우지 않습니다.
+    // 기존 수집값을 지연 상태로 유지하고, 최신 원본 조회 실패 사유를 명확히 표시합니다.
+    if(hasUsableMetrics(r)){
+      out.push({...r,level:'지연',parser:`${r.parser||'JINHAK'}_FRESH_WAIT`,warnings:[`최신 진학사 상단표 조회 실패 · 기존 수집값 임시 유지 (${freshError})`]});
+      continue;
+    }
+
+    out.push({...r,level:'확인필요',parser:`${r.parser||'JINHAK'}_FRESH_REQUIRED`,warnings:[`최신 진학사 상단표를 확인하지 못했고 사용할 수 있는 기존값도 없습니다. (${freshError})`]});
   }
   return {...data,results:out};
 }
@@ -132,6 +144,7 @@ export async function collectHybridAndStore(env, triggerType='manual'){
       fallbackUniversities:fallbackNames,
       delayedUniversities:delayedNames,
       priorityTargets:data.results.filter(r=>PRIORITY_TARGETS[r.name]).map(r=>({name:r.name,status:r.level,parser:r.parser,inner:r.inner,total:r.total,sourceCollectedAt:r.sourceCollectedAt||null,warning:r.warnings?.[0]||null})),
+      targetFresh:data.targetFresh||{},
       legacyImport
     };
   }catch(e){
