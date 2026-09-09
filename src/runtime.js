@@ -2,8 +2,18 @@ import app from './db-stage.js';
 import { probeKyungsungSession, probeKyungsungLoginForm, probeKyungsungLoginScript } from './ks-session-probe.js';
 import { kyungsungLiveWithAccount, kyungsungCorrectionDiagnostics } from './ks-auth.js';
 import { collectHybridAndStore } from './hybrid-store.js';
+import {
+  processReportingAfterCollection,
+  backfillReports,
+  listReports,
+  reportDetail,
+  reportArchive,
+  historyData,
+  reportingStatus,
+  getReportingSettings
+} from './reporting.js';
 
-const RELEASE = '2026-09-09-r5';
+const RELEASE = '2026-09-09-r6';
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
@@ -46,7 +56,7 @@ export default {
         ok:true,
         service:'admissions-ratio-2027',
         release:RELEASE,
-        scheduler:'direct-worker-call',
+        scheduler:'direct-worker-call+server-reporting',
         d1Binding:Boolean(env.DB),
         kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
         checkedAt:new Date().toISOString()
@@ -55,9 +65,10 @@ export default {
 
     if(url.pathname === '/check'){
       try{
-        const [db, latest] = await Promise.all([
+        const [db, latest, reporting] = await Promise.all([
           appJson('/db/status', request, env, ctx),
-          appJson('/api/latest', request, env, ctx)
+          appJson('/api/latest', request, env, ctx),
+          reportingStatus(env)
         ]);
         const rows = Array.isArray(latest?.results) ? latest.results : [];
         const attention = rows
@@ -72,7 +83,7 @@ export default {
         return jsonResponse({
           ok:Boolean(db?.connected && db?.initialized && latest?.run),
           release:RELEASE,
-          scheduler:'direct-worker-call',
+          scheduler:'direct-worker-call+server-reporting',
           d1Binding:Boolean(env.DB),
           kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
           db,
@@ -82,6 +93,13 @@ export default {
           normalUniversities:rows.filter(r=>r.status === '정상').length,
           attentionCount:attention.length,
           attention,
+          reporting:{
+            initialized:reporting.initialized,
+            reportCount:reporting.reportCount,
+            reports:reporting.reports,
+            settings:reporting.settings,
+            nowKst:reporting.nowKst
+          },
           checkedAt:new Date().toISOString()
         });
       }catch(e){
@@ -96,13 +114,49 @@ export default {
     if (url.pathname === '/collect/once') {
       try {
         const triggerType = url.searchParams.get('source') === 'cron' ? 'cron' : 'manual';
-        return jsonResponse(await collectHybridAndStore(env, triggerType));
+        const collection = await collectHybridAndStore(env, triggerType);
+        const reporting = await processReportingAfterCollection(env);
+        return jsonResponse({...collection, reporting});
       } catch (e) {
         return jsonResponse({
           ok: false,
           error: e instanceof Error ? e.message : String(e)
         }, 500);
       }
+    }
+
+    if(url.pathname === '/api/reporting/status'){
+      try { return jsonResponse(await reportingStatus(env)); }
+      catch(e){ return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500); }
+    }
+
+    if(url.pathname === '/api/reporting/settings'){
+      try { return jsonResponse(await getReportingSettings(env)); }
+      catch(e){ return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500); }
+    }
+
+    if(url.pathname === '/api/reports/backfill'){
+      try { return jsonResponse(await backfillReports(env)); }
+      catch(e){ return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500); }
+    }
+
+    if(url.pathname === '/api/reports/archive'){
+      try { return jsonResponse(await reportArchive(env)); }
+      catch(e){ return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500); }
+    }
+
+    if(url.pathname === '/api/reports'){
+      try{
+        const key=url.searchParams.get('key');
+        return jsonResponse(key ? await reportDetail(env,key) : await listReports(env));
+      }catch(e){
+        return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500);
+      }
+    }
+
+    if(url.pathname === '/api/history'){
+      try { return jsonResponse(await historyData(env,url.searchParams)); }
+      catch(e){ return jsonResponse({ok:false,error:e instanceof Error?e.message:String(e)},500); }
     }
 
     if (url.pathname === '/debug/ks-corrections') {
@@ -169,6 +223,7 @@ export default {
       if (!result?.saved || !result?.runId) {
         throw new Error(`자동수집 실패: ${JSON.stringify(result)}`);
       }
+      await processReportingAfterCollection(env);
     })());
   }
 };
