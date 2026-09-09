@@ -38,22 +38,24 @@ export async function collectHybridAndStore(env, triggerType='manual'){
       r.excluded?.length ? r.excluded.join(' | ') : null,
       diagnosticText(r),
       r.url,
-      collectedAt
+      r.sourceCollectedAt || collectedAt
     ));
     if(inserts.length) await env.DB.batch(inserts);
 
     const okCount = data.results.filter(r => r.level === '정상').length;
-    const errorCount = data.results.length - okCount;
+    const delayedCount = data.results.filter(r => r.level === '지연').length;
+    const errorCount = data.results.length - okCount - delayedCount;
     const finishedAt = new Date().toISOString();
     const fallbackNames = Object.entries(data.repatriateFallback || {}).filter(([,v])=>v?.ok).map(([k])=>k);
-    const note = `hybrid=uway-direct+jinhak-ks${fallbackNames.length?'+jina-fallback':''}; roundId=${data.sourceRoundId ?? 'unknown'}${fallbackNames.length?`; fallback=${fallbackNames.join(',')}`:''}`;
+    const delayedNames = data.results.filter(r=>r.level==='지연').map(r=>r.name);
+    const note = `hybrid=uway-direct+jinhak-ks${fallbackNames.length?'+jina-fallback':''}; roundId=${data.sourceRoundId ?? 'unknown'}${fallbackNames.length?`; fallback=${fallbackNames.join(',')}`:''}${delayedNames.length?`; delayed=${delayedNames.join(',')}`:''}`;
 
     await env.DB.prepare(
       `UPDATE crawl_runs SET finished_at=?, status=?, ok_count=?, error_count=?, note=? WHERE id=?`
     ).bind(
       finishedAt,
       errorCount === 0 ? 'success' : 'partial',
-      okCount,
+      okCount + delayedCount,
       errorCount,
       note,
       runId
@@ -73,11 +75,13 @@ export async function collectHybridAndStore(env, triggerType='manual'){
       finishedAt,
       universities:data.results.length,
       okCount,
+      delayedCount,
       errorCount,
       snapshotsSaved:data.results.length,
       sourceRoundId:data.sourceRoundId ?? null,
       collectionMode:fallbackNames.length?'hybrid-resilient':'hybrid',
       fallbackUniversities:fallbackNames,
+      delayedUniversities:delayedNames,
       legacyImport
     };
   }catch(e){
