@@ -1,4 +1,4 @@
-import { collectHybrid as collectBase } from './hybrid-collector-silla-final.js';
+import { collectHybrid as collectBase } from './hybrid-collector-ks-testurl.js';
 
 const TARGETS=new Set(['부산외국어대학교','신라대학교']);
 const MAX_SOURCE_AGE_MIN=25;
@@ -16,7 +16,7 @@ export async function collectHybrid(env){
     }
     const ageMin=Math.max(0,(Date.now()-ms)/60000);
     if(ageMin>MAX_SOURCE_AGE_MIN){
-      return {...r,level:'지연',parser:`${r.parser||'JINHAK_SUMMARY_PRIORITY'}_STALE_SOURCE`,warnings:[`진학사 원본 자료가 ${Math.floor(ageMin)}분 전 값이어서 정상값으로 확정하지 않습니다.`]};
+      return {...r,level:'지연',parser:`${r.parser||'JINHAK_SUMMARY_PRIORITY'}_STALE_SOURCE`,warnings:[`원본 자료가 ${Math.floor(ageMin)}분 전 값이어서 정상값으로 확정하지 않습니다.`]};
     }
     return r;
   });
