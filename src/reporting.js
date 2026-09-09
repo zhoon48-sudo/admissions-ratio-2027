@@ -146,6 +146,23 @@ async function snapshotNearTarget(env, universityName, targetIso, requireNormal=
   return row || null;
 }
 
+// 공통 보고시각 자료는 해당 시각의 값이 우선입니다.
+// 다만 최종일에 14:00처럼 16:00보다 먼저 공개를 종료한 대학은
+// 16:00 직전 자료가 더 이상 생성되지 않을 수 있으므로 같은 날의 마지막 저장값을 사용합니다.
+async function snapshotAsOfTarget(env, universityName, reportDate, targetIso, requireNormal=false){
+  const near = await snapshotNearTarget(env, universityName, targetIso, requireNormal);
+  if(near) return near;
+
+  const dayStartIso = utcIso(reportDate, '00:00');
+  const statusSql = requireNormal ? ` AND status='정상'` : '';
+  const row = await env.DB.prepare(`
+    SELECT * FROM competition_snapshots
+    WHERE university_name=? AND collected_at>=? AND collected_at<?${statusSql}
+    ORDER BY collected_at DESC, id DESC LIMIT 1
+  `).bind(universityName, dayStartIso, targetIso).first();
+  return row || null;
+}
+
 async function snapshotOnOrAfter(env, universityName, targetIso, untilIso, requireNormal=true){
   const statusSql = requireNormal ? ` AND status='정상'` : '';
   const row = await env.DB.prepare(`
@@ -194,7 +211,7 @@ async function createDailyReport(env, reportDate, reportTime){
   const targetIso = utcIso(reportDate, reportTime);
   const items=[];
   for(const name of names){
-    const snapshot = await snapshotNearTarget(env, name, targetIso, false);
+    const snapshot = await snapshotAsOfTarget(env, name, reportDate, targetIso, false);
     if(!snapshot) return {created:false, skipped:true, reason:`${name} 저장자료 없음`};
     items.push({universityName:name, snapshot, appliedTime:reportTime});
   }
@@ -204,7 +221,9 @@ async function createDailyReport(env, reportDate, reportTime){
     kind:'daily',
     dayNo:dayNoFor(reportDate),
     reportTime,
-    note:`공통 보고시각 ${reportTime} 기준 자동 저장`
+    note:reportDate===FINAL_DATE
+      ? `공통 보고시각 ${reportTime} 기준 5일차 자동 저장 · 조기 공개종료 대학은 ${reportTime} 이전 마지막 공개자료 적용`
+      : `공통 보고시각 ${reportTime} 기준 자동 저장`
   }, items);
 }
 
@@ -258,7 +277,9 @@ export async function backfillReports(env){
   const now = kstParts();
   const results=[];
 
-  for(let d=ADMISSION_START; d<FINAL_DATE; d=addDays(d,1)){
+  // 접수 마지막 날(9/11)도 16:00 공통 보고자료를 먼저 저장합니다.
+  // 이후 대학별 공개종료가 모두 끝나면 같은 날짜에 별도의 최종일 보고자료를 추가합니다.
+  for(let d=ADMISSION_START; d<=FINAL_DATE; d=addDays(d,1)){
     const targetPassed = compareDateTime(now.date, now.time, d, settings.reportTime) >= 0;
     if(targetPassed) results.push({date:d, kind:'daily', ...(await createDailyReport(env,d,settings.reportTime))});
   }
