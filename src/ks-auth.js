@@ -55,6 +55,11 @@ async function sessionFetch(session,query,options={}){
   });
 }
 
+async function responseJson(response){
+  const text=await response.text();
+  try{return {json:JSON.parse(text),text};}catch{return {json:null,text};}
+}
+
 export async function kyungsungLiveWithAccount(env){
   const session=await loginSession(env);
   if(!session.ok)return session;
@@ -103,4 +108,55 @@ export async function kyungsungCorrectionDiagnostics(env){
     urlsResponseKeys:urls&&typeof urls==='object'?Object.keys(urls):[],
     urlsPreview:urls?null:urlsText.slice(0,500)
   };
+}
+
+export async function kyungsungRepatriateDiagnostics(env){
+  const session=await loginSession(env);
+  if(!session.ok)return session;
+
+  const urlsRes=await sessionFetch(session,'cmd=cmp_manage_api&action=urls&roundId=3');
+  const {json:urls,text:urlsText}=await responseJson(urlsRes);
+  if(!urlsRes.ok||!Array.isArray(urls?.urls)){
+    return {ok:false,stage:'urls',httpStatus:urlsRes.status,preview:urlsText.slice(0,800)};
+  }
+
+  const wanted=[
+    {pattern:/부산외/,canonical:'부산외국어대학교'},
+    {pattern:/신라/,canonical:'신라대학교'}
+  ];
+  const results=[];
+
+  for(const target of wanted){
+    const cfg=urls.urls.find(r=>target.pattern.test(String(r.univName||'')));
+    if(!cfg){
+      results.push({university:target.canonical,ok:false,error:'경성대 URL 설정에서 대학을 찾지 못했습니다.'});
+      continue;
+    }
+    const form=new URLSearchParams({
+      cmd:'cmp_manage_api',
+      action:'test_url',
+      roundId:'3',
+      univCd:String(cfg.univCd||''),
+      univName:String(cfg.univName||''),
+      url:String(cfg.url||'').replace(/^https?:\/\//i,'')
+    });
+    const res=await sessionFetch(session,'cmd=cmp_manage_api&action=test_url',{
+      method:'POST',
+      contentType:'application/x-www-form-urlencoded; charset=UTF-8',
+      body:form.toString()
+    });
+    const {json,text}=await responseJson(res);
+    results.push({
+      university:target.canonical,
+      sourceUnivName:cfg.univName||null,
+      url:cfg.url||null,
+      httpStatus:res.status,
+      ok:Boolean(res.ok&&json?.ok!==false),
+      responseKeys:json&&typeof json==='object'?Object.keys(json):[],
+      response:json||null,
+      preview:json?null:text.slice(0,1200)
+    });
+  }
+
+  return {ok:results.every(r=>r.ok),loginStatus:session.loginStatus,results};
 }
