@@ -56,7 +56,8 @@ function findSummaryTable(html){
   const tables=[];
   for(const m of String(html||'').matchAll(/<table\b[^>]*>[\s\S]*?<\/table>/gi)){
     const text=htmlText(m[0]);
-    if(/재외국민/.test(text) && /정원내/.test(text) && /정원외/.test(text) && /모집인원/.test(text) && /지원인원/.test(text)){
+    const hasScope=/정원내/.test(text) || /\[정원외\]/.test(text);
+    if(/재외국민/.test(text) && hasScope && /모집인원/.test(text) && /지원인원/.test(text)){
       tables.push({html:m[0],text});
     }
   }
@@ -69,7 +70,7 @@ function parseDirectSummary(html, spec){
   const table=findSummaryTable(html);
   if(!table) return {ok:false,error:'전형별 경쟁률 현황 표를 찾지 못했습니다.'};
 
-  let scope=null;
+  let scope='inner';
   const rows=[];
   for(const m of table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)){
     const cells=[];
@@ -81,6 +82,7 @@ function parseDirectSummary(html, spec){
     const first=String(cells[0]||'').replace(/\s+/g,'');
     if(first==='정원내') scope='inner';
     else if(first==='정원외') scope='outside';
+    else if(/\[정원외\]/.test(rowText)) scope='outside';
 
     if(/소계|합계|총계/.test(rowText)) continue;
 
@@ -95,7 +97,7 @@ function parseDirectSummary(html, spec){
     if(!labelCells.some(c=>/[가-힣A-Za-z]/.test(c))) continue;
 
     const nums=cells.map(intCell).filter(v=>v!==null);
-    if(nums.length<2 || !scope) continue;
+    if(nums.length<2) continue;
 
     const quota=nums[nums.length-2];
     const apply=nums[nums.length-1];
