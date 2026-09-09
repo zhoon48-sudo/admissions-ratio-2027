@@ -3,7 +3,7 @@ import { probeKyungsungSession, probeKyungsungLoginForm, probeKyungsungLoginScri
 import { kyungsungLiveWithAccount, kyungsungCorrectionDiagnostics } from './ks-auth.js';
 import { collectHybridAndStore } from './hybrid-store.js';
 
-const RELEASE = '2026-09-09-r3';
+const RELEASE = '2026-09-09-r4';
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
@@ -25,6 +25,14 @@ function withCors(response){
   });
 }
 
+async function appJson(path, request, env, ctx){
+  const target = new URL(path, request.url);
+  const response = await app.fetch(new Request(target.toString(), {method:'GET'}), env, ctx);
+  const text = await response.text();
+  try { return JSON.parse(text); }
+  catch { return {ok:false, httpStatus:response.status, error:'내부 점검 응답을 JSON으로 읽지 못했습니다.'}; }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -43,6 +51,46 @@ export default {
         kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
         checkedAt:new Date().toISOString()
       });
+    }
+
+    if(url.pathname === '/check'){
+      try{
+        const [db, latest] = await Promise.all([
+          appJson('/db/status', request, env, ctx),
+          appJson('/api/latest', request, env, ctx)
+        ]);
+        const rows = Array.isArray(latest?.results) ? latest.results : [];
+        const attention = rows
+          .filter(r => r.status !== '정상')
+          .map(r => ({
+            university:r.university_name,
+            status:r.status,
+            warning:r.warning_note || null,
+            parser:r.parser || null
+          }));
+        const latestCollectedAt = rows.map(r=>r.collected_at).filter(Boolean).sort().pop() || null;
+        return jsonResponse({
+          ok:Boolean(db?.connected && db?.initialized && latest?.run),
+          release:RELEASE,
+          scheduler:'direct-worker-call',
+          d1Binding:Boolean(env.DB),
+          kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
+          db,
+          latestRun:latest?.run || null,
+          latestCollectedAt,
+          storedUniversities:rows.length,
+          normalUniversities:rows.filter(r=>r.status === '정상').length,
+          attentionCount:attention.length,
+          attention,
+          checkedAt:new Date().toISOString()
+        });
+      }catch(e){
+        return jsonResponse({
+          ok:false,
+          release:RELEASE,
+          error:e instanceof Error ? e.message : String(e)
+        }, 500);
+      }
     }
 
     if (url.pathname === '/collect/once') {
