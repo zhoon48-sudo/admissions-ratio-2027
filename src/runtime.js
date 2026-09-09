@@ -14,7 +14,7 @@ import {
   getReportingSettings
 } from './reporting.js';
 
-const RELEASE = '2026-09-09-r11';
+const RELEASE = '2026-09-09-r12';
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
@@ -57,7 +57,7 @@ export default {
         ok:true,
         service:'admissions-ratio-2027',
         release:RELEASE,
-        scheduler:'direct-worker-call+server-reporting+jina-fallback+web-assets',
+        scheduler:'direct-worker-call+server-reporting+jina-fallback+web-assets+legacy-import',
         d1Binding:Boolean(env.DB),
         kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
         legacyReportDates:legacyReportDates(),
@@ -85,7 +85,7 @@ export default {
         return jsonResponse({
           ok:Boolean(db?.connected && db?.initialized && latest?.run),
           release:RELEASE,
-          scheduler:'direct-worker-call+server-reporting+jina-fallback+web-assets',
+          scheduler:'direct-worker-call+server-reporting+jina-fallback+web-assets+legacy-import',
           d1Binding:Boolean(env.DB),
           kyungsungSecrets:Boolean(env.KS_EMP_ID && env.KS_PASSWORD),
           db,
@@ -118,8 +118,9 @@ export default {
       try {
         const triggerType = url.searchParams.get('source') === 'cron' ? 'cron' : 'manual';
         const collection = await collectHybridAndStore(env, triggerType);
+        const legacyImport = await importLegacyReports(env);
         const reporting = await processReportingAfterCollection(env);
-        return jsonResponse({...collection, reporting});
+        return jsonResponse({...collection, legacyImport, reporting});
       } catch (e) {
         return jsonResponse({
           ok: false,
@@ -246,6 +247,7 @@ export default {
       if (!result?.saved || !result?.runId) {
         throw new Error(`자동수집 실패: ${JSON.stringify(result)}`);
       }
+      await importLegacyReports(env);
       await processReportingAfterCollection(env);
     })());
   }
