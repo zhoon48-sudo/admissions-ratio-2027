@@ -1,4 +1,4 @@
-import { collectHybrid } from './hybrid-collector.js';
+import { collectHybrid } from './hybrid-collector-stable.js';
 
 function diagnosticText(r){
   if(r.warnings?.length) return r.warnings.join(' | ');
@@ -44,7 +44,8 @@ export async function collectHybridAndStore(env, triggerType='manual'){
     const okCount = data.results.filter(r => r.level === '정상').length;
     const errorCount = data.results.length - okCount;
     const finishedAt = new Date().toISOString();
-    const note = `hybrid=uway-direct+jinhak-ks; roundId=${data.sourceRoundId ?? 'unknown'}`;
+    const fallbackNames = Object.entries(data.repatriateFallback || {}).filter(([,v])=>v?.ok).map(([k])=>k);
+    const note = `hybrid=uway-direct+jinhak-ks${fallbackNames.length?'+jina-fallback':''}; roundId=${data.sourceRoundId ?? 'unknown'}${fallbackNames.length?`; fallback=${fallbackNames.join(',')}`:''}`;
 
     await env.DB.prepare(
       `UPDATE crawl_runs SET finished_at=?, status=?, ok_count=?, error_count=?, note=? WHERE id=?`
@@ -67,7 +68,8 @@ export async function collectHybridAndStore(env, triggerType='manual'){
       errorCount,
       snapshotsSaved:data.results.length,
       sourceRoundId:data.sourceRoundId ?? null,
-      collectionMode:'hybrid'
+      collectionMode:fallbackNames.length?'hybrid-resilient':'hybrid',
+      fallbackUniversities:fallbackNames
     };
   }catch(e){
     const finishedAt = new Date().toISOString();
