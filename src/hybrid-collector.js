@@ -28,11 +28,18 @@ const NAME_MAP = {
 };
 
 // 재외국민은 모니터링 집계에서 제외합니다.
-// 지원인원은 실시간으로 변하므로 고정 숫자를 차감하지 않습니다.
-// 경성대 원천 서버가 추후 동적 제외값을 제공하면 아래 호환 필드로 자동 반영합니다.
+// 부산외대·신라대는 경성대 서버의 전체합계에는 재외국민이 포함되므로,
+// 재외국민 지원인원만 진학사 공개페이지에서 실시간으로 별도 읽어 차감합니다.
 const EXCLUDE_REPATRIATE = {
   '부산외국어대학교': {quota:20, expectedTotalQuota:1554},
   '신라대학교': {quota:5, expectedTotalQuota:1472}
+};
+
+const JINHAK_HEADERS = {
+  'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36',
+  'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language':'ko-KR,ko;q=0.9,en;q=0.7',
+  'Referer':'https://www.jinhakapply.com/'
 };
 
 function firstCookie(headers){
@@ -65,6 +72,77 @@ function firstFinite(...values){
     if(Number.isFinite(n) && n >= 0) return n;
   }
   return null;
+}
+
+function htmlText(value){
+  return String(value || '')
+    .replace(/<script\b[\s\S]*?<\/script>|<style\b[\s\S]*?<\/style>|<!--[\s\S]*?-->/gi, ' ')
+    .replace(/<br\s*\/?\s*>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_,n)=>String.fromCodePoint(+n))
+    .replace(/&#x([0-9a-f]+);/gi, (_,n)=>String.fromCodePoint(parseInt(n,16)))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function intCell(value){
+  const s = htmlText(value).replace(/,/g,'').trim();
+  return /^\d+$/.test(s) ? Number(s) : null;
+}
+
+async function fetchJinhakRepatriate(u){
+  const spec = EXCLUDE_REPATRIATE[u.name];
+  if(!spec) return null;
+  try{
+    const response = await fetch(u.url, {redirect:'follow', headers:JINHAK_HEADERS});
+    if(!response.ok) return {ok:false, error:`진학사 직접조회 HTTP ${response.status}`};
+
+    const contentType = response.headers.get('content-type') || '';
+    let charset = (contentType.match(/charset\s*=\s*([^;\s]+)/i)?.[1] || 'utf-8')
+      .replace(/["']/g,'').toLowerCase();
+    if(/^(euc[-_]?kr|ks_c_5601-1987|korean)$/i.test(charset)) charset='euc-kr';
+    const buf = await response.arrayBuffer();
+    let html;
+    try { html = new TextDecoder(charset).decode(buf); }
+    catch { html = new TextDecoder('utf-8').decode(buf); }
+
+    const candidates=[];
+    for(const tr of html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)){
+      const rowText = htmlText(tr[1]);
+      if(!/재외국민/.test(rowText)) continue;
+      const cells=[];
+      for(const td of tr[1].matchAll(/<(td|th)\b[^>]*>([\s\S]*?)<\/\1>/gi)) cells.push(td[2]);
+      const ints = cells.map(intCell).filter(v=>v !== null);
+      if(ints.length < 2) continue;
+      const quota = ints[ints.length - 2];
+      const apply = ints[ints.length - 1];
+      candidates.push({quota, apply, rowText});
+    }
+
+    const exact = candidates.find(x=>x.quota === spec.quota);
+    if(!exact){
+      return {
+        ok:false,
+        error:`재외국민 모집 ${spec.quota}명 행을 찾지 못했습니다.`,
+        candidates:candidates.slice(0,5)
+      };
+    }
+    return {
+      ok:true,
+      quota:exact.quota,
+      apply:exact.apply,
+      source:'JINHAK_DIRECT',
+      rowText:exact.rowText
+    };
+  }catch(e){
+    return {ok:false, error:e instanceof Error ? e.message : String(e)};
+  }
 }
 
 async function jsonOrNull(response){
@@ -196,7 +274,7 @@ async function fetchKyungsungLive(env){
   return {...json, pusanRule};
 }
 
-function fromKyungsung(u, row){
+function fromKyungsung(u, row, directRepatriate=null){
   if(!row){
     return {
       name:u.name, agency:u.agency, mode:u.mode, level:'접속실패',
@@ -220,6 +298,7 @@ function fromKyungsung(u, row){
     const upstreamExcluded = tq === repatriate.expectedTotalQuota;
     const rawIncludesRepatriate = tq === repatriate.expectedTotalQuota + repatriate.quota;
     const dynamicApply = firstFinite(
+      directRepatriate?.ok ? directRepatriate.apply : null,
       row.repatriateApply,
       row.repatriate_apply,
       row.excludedRepatriateApply,
@@ -233,13 +312,12 @@ function fromKyungsung(u, row){
       tq -= repatriate.quota;
       ta -= dynamicApply;
       excluded.push(`재외국민 동적 제외: 모집 ${repatriate.quota}명 / 지원 ${dynamicApply}명`);
-      correctionTag += '_NO_REPATRIATE';
+      correctionTag += directRepatriate?.ok ? '_NO_REPATRIATE_JINHAK' : '_NO_REPATRIATE';
     }else if(rawIncludesRepatriate){
-      // 모집인원은 정확히 제외할 수 있지만, 지원인원은 실시간 변동값을 원천 서버가 제공해야 합니다.
-      // 과거 특정 시각의 지원인원을 고정 차감하면 시간이 지날수록 잘못된 값이 되므로 정상 처리하지 않습니다.
       tq -= repatriate.quota;
       excluded.push(`재외국민 모집인원 ${repatriate.quota}명 제외 / 지원인원 동적 제외 대기`);
-      warnings.push('재외국민 지원인원 동적 제외값이 원천 서버에 없어 전체 지원인원은 검증이 필요합니다.');
+      const detail = directRepatriate?.error ? ` (${directRepatriate.error})` : '';
+      warnings.push(`재외국민 지원인원 동적 제외값을 확인하지 못했습니다${detail}`);
       correctionTag += '_REPATRIATE_APPLY_PENDING';
     }else{
       warnings.push(`재외국민 제외 기준 모집인원 확인 필요: 원천 전체 ${rawTotalQuota}명 / 기대 ${repatriate.expectedTotalQuota}명`);
@@ -298,11 +376,14 @@ export async function collectHybrid(env){
   const checkedAt = new Date().toISOString();
   const uwayUniversities = UNIVERSITIES.filter(u => u.agency === 'UWAY');
   const jinhakUniversities = UNIVERSITIES.filter(u => u.agency === 'JINHAK');
+  const repatriateUniversities = jinhakUniversities.filter(u => EXCLUDE_REPATRIATE[u.name]);
 
-  const [uwayResults, ks] = await Promise.all([
+  const [uwayResults, ks, repatriateResults] = await Promise.all([
     Promise.all(uwayUniversities.map(u => auditOne(u))),
-    fetchKyungsungLive(env)
+    fetchKyungsungLive(env),
+    Promise.all(repatriateUniversities.map(async u => [u.name, await fetchJinhakRepatriate(u)]))
   ]);
+  const repatriateByName = new Map(repatriateResults);
 
   const ksByName = new Map();
   const ksByCanonicalName = new Map();
@@ -316,7 +397,7 @@ export async function collectHybrid(env){
   const byName = new Map(uwayResults.map(r => [r.name, r]));
   for(const u of jinhakUniversities){
     const row = ksByName.get(u.name) || ksByCanonicalName.get(canonicalName(u.name));
-    byName.set(u.name, fromKyungsung(u, row));
+    byName.set(u.name, fromKyungsung(u, row, repatriateByName.get(u.name) || null));
   }
 
   const results = UNIVERSITIES.map(u => byName.get(u.name) || {
@@ -329,6 +410,7 @@ export async function collectHybrid(env){
     checkedAt,
     sourceRoundId:ks.roundId ?? null,
     pusanRule:ks.pusanRule ?? null,
+    repatriateDirect:Object.fromEntries(repatriateResults),
     summary:{
       universities:results.length,
       ok,
